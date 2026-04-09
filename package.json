@@ -1,0 +1,43 @@
+{
+  "name": "sillygoose-tool",
+  "version": "1.0.0",
+  "description": "SillyGoose Configuration and Flight Tool",
+  "main": "main.js",
+  "author": "Your Name",
+  "license": "ISC",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.sillygoose.config",
+    "productName": "SillyGooseTool",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "portable"
+      ]
+    },
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Utility"
+    },
+    "portable": {
+      "artifactName": "${productName}_Portable.${ext}"
+    },
+    "files": [
+      "index.html",
+      "main.js",
+      "lib/**/*",
+      "image.png",
+      "Logo simple glasses.ico"
+    ]
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3"
+  }
+}
