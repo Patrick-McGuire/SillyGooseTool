@@ -4,21 +4,28 @@ const { autoUpdater } = require('electron-updater');
 
 // Adafruit USB vendor ID. SillyGoose boards enumerate under Adafruit's VID and
 // set their USB product string to "SillyGoose" (platformio.ini board.name).
-const ADAFRUIT_VENDOR_ID = '239a';
+const ADAFRUIT_VENDOR_ID = 0x239a; // 9114
 
-// Decide which connected serial ports are SillyGoose boards. Electron exposes
-// vendorId/productId as lowercase hex strings and the product string in
-// displayName. Prefer the precise match (Adafruit VID + "SillyGoose" in the
-// name); if no name matches (e.g. the OS didn't surface a product string), fall
-// back to any Adafruit device so the user can still connect.
+// Electron reports vendorId as a *decimal* string ("9114") on Windows, but some
+// platforms/versions report hex ("239a"). Accept either so the match is robust.
+function vendorMatches(vendorId, target) {
+  if (vendorId == null) return false;
+  const s = String(vendorId).trim().toLowerCase().replace(/^0x/, '');
+  return parseInt(s, 10) === target || parseInt(s, 16) === target;
+}
+
+// Decide which connected serial ports are SillyGoose boards. Prefer the precise
+// match (Adafruit VID + "SillyGoose" in the displayName, e.g. "SillyGooseV2");
+// if no name matches (e.g. the OS didn't surface a product string), fall back to
+// any Adafruit device so the user can still connect.
 function filterSillyGoosePorts(portList) {
   const named = portList.filter(
     (p) =>
-      (p.vendorId || '').toLowerCase() === ADAFRUIT_VENDOR_ID &&
+      vendorMatches(p.vendorId, ADAFRUIT_VENDOR_ID) &&
       (p.displayName || '').toLowerCase().includes('sillygoose')
   );
   if (named.length > 0) return named;
-  return portList.filter((p) => (p.vendorId || '').toLowerCase() === ADAFRUIT_VENDOR_ID);
+  return portList.filter((p) => vendorMatches(p.vendorId, ADAFRUIT_VENDOR_ID));
 }
 
 // Styled, frameless chooser. Shown when more than one SillyGoose is present, or
