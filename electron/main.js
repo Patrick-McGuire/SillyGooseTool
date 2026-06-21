@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const path = require('path');
+const { autoUpdater } = require('electron-updater');
 
 // Adafruit USB vendor ID. SillyGoose boards enumerate under Adafruit's VID and
 // set their USB product string to "SillyGoose" (platformio.ini board.name).
@@ -129,6 +130,55 @@ function createWindow() {
   win.webContents.session.setDevicePermissionHandler((details) => details.deviceType === 'serial');
 
   win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+
+  // Check GitHub Releases for updates once the window has loaded. Only runs in
+  // the packaged app (electron-updater needs app-update.yml from the installer).
+  win.webContents.once('did-finish-load', () => initAutoUpdater(win));
+}
+
+// Prompt-based auto-update against the GitHub Releases publish config. Mirrors
+// rocket-flight-data: ask before downloading, ask before restarting to install.
+let autoUpdaterStarted = false;
+function initAutoUpdater(win) {
+  if (autoUpdaterStarted || !app.isPackaged) return;
+  autoUpdaterStarted = true;
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('update-available', async (info) => {
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'info',
+      buttons: ['Download', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Update available',
+      message: `SillyGoose Tool ${info.version} is available.`,
+      detail: 'Download it now? You can keep working while it downloads in the background.'
+    });
+    if (response === 0) {
+      autoUpdater.downloadUpdate().catch((err) => console.error('update download failed:', err));
+    }
+  });
+
+  autoUpdater.on('download-progress', (p) => win.setProgressBar(p.percent / 100));
+
+  autoUpdater.on('update-downloaded', async (info) => {
+    win.setProgressBar(-1);
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'info',
+      buttons: ['Restart now', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Update ready',
+      message: `SillyGoose Tool ${info.version} has been downloaded.`,
+      detail: 'Restart to install now? It will also install automatically next time you quit.'
+    });
+    if (response === 0) autoUpdater.quitAndInstall();
+  });
+
+  autoUpdater.on('error', (err) => console.error('auto-updater error:', err));
+
+  autoUpdater.checkForUpdates().catch((err) => console.error('update check failed:', err));
 }
 
 app.whenReady().then(createWindow);

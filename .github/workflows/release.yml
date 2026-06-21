@@ -1,0 +1,56 @@
+name: Release desktop app
+
+# Builds the Windows installer (.exe) and Linux AppImage and publishes them,
+# with auto-updater metadata, to a GitHub Release when a version tag is pushed.
+#
+# To cut a release:
+#   1. Bump "version" in package.json (must match the tag, e.g. 1.0.1)
+#   2. Commit + push to main
+#   3. git tag v1.0.1 && git push origin v1.0.1
+# electron-builder publishes a GitHub Release for the package.json version; the
+# installed app's auto-updater reads the uploaded latest*.yml from that release.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      # Both jobs publish to one shared GitHub Release; run serially to avoid
+      # competing draft/create operations.
+      max-parallel: 1
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Linux packaging dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2
+
+      - name: Build and publish
+        env:
+          # electron-builder reads GH_TOKEN for the GitHub publish provider.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run release

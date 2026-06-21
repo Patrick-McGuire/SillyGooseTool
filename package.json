@@ -10,13 +10,20 @@
     "build:web": "node build.mjs",
     "icon": "node make-icon.mjs",
     "start": "npm run build:web && electron .",
-    "dist": "npm run build:web && electron-builder --win nsis"
+    "dist": "npm run build:web && electron-builder --win nsis",
+    "release": "npm run build:web && electron-builder --publish always"
   },
   "build": {
     "appId": "com.sillygoose.tool",
     "productName": "SillyGooseTool",
     "directories": {
       "output": "release"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Patrick-McGuire",
+      "repo": "SillyGooseTool",
+      "releaseType": "release"
     },
     "files": [
       "dist/index.html",
@@ -42,6 +49,9 @@
       "category": "Utility",
       "icon": "assets/icon.png"
     }
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
   },
   "devDependencies": {
     "electron": "^30.0.0",
