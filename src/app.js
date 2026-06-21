@@ -107,6 +107,7 @@
             setSerialEnabled(true);
             keepReading = true;
             readLoop();
+            if (window.sgFirmware) fwDetectVariant();
         } catch (e) { logTerm("Connection Error: " + e.message, "red"); }
     }
 
@@ -677,8 +678,11 @@
     // undefined, so the Firmware tab stays hidden and this code never runs.
 
     const fwSleep = (ms) => new Promise(r => setTimeout(r, ms));
-    let fwReleases = null;   // { flight: [...], notFlightTested: [...] }
+    let fwReleases = null;       // { flight: [...], notFlightTested: [...] }
     let fwBusy = false;
+    let fwReconnectCancel = false; // set when the user clicks Reconnect manually
+    let fwAppPid = null;           // USB productId of the app firmware (captured pre-flash);
+                                   // lets auto-reconnect tell the app apart from the bootloader
 
     function fwStatus(msg, color = '#cbd5e1') {
         const el = document.getElementById('fw-status');
@@ -720,11 +724,34 @@
         return rel ? (rel.assets[variant] || null) : null;
     }
 
+    // Auto-detect the V1/V2 firmware variant from the USB product descriptor of
+    // the connected board (e.g. "SillyGooseV2"). NOT the user-writable BOARD_NAME.
+    // Safe to call repeatedly (on connect / when opening the tab).
+    async function fwDetectVariant() {
+        if (!window.sgFirmware) return;
+        try {
+            const info = await window.sgFirmware.boardInfo();
+            const name = (info && info.displayName) || '';
+            const m = name.match(/V(\d)/i);
+            const detEl = document.getElementById('fw-detected');
+            if (m) {
+                document.getElementById('fw-variant').value = 'V' + m[1];
+                if (detEl) detEl.textContent = `detected ${name}`;
+            } else if (detEl) {
+                detEl.textContent = name ? `connected as "${name}" — pick the variant manually` : '';
+            }
+        } catch (e) {}
+    }
+
     // 1200-baud touch: reset the SAMD21 into its UF2 bootloader using the
     // currently-connected port, then release it. Mirrors the Arduino touch1200.
     async function fwEnterBootloaderViaTouch() {
         const p = port;
         if (!p) return;
+        // Remember the running app's USB productId. The UF2 bootloader enumerates
+        // under the same vendor (0x239A) but a DIFFERENT productId, so this lets
+        // auto-reconnect skip the bootloader's CDC port and wait for the app.
+        try { fwAppPid = (p.getInfo && p.getInfo().usbProductId) || null; } catch (e) { fwAppPid = null; }
         keepReading = false;                                   // stop readLoop re-grabbing the reader
         if (reader) { try { await reader.cancel(); } catch (e) {} }
         // Wait for readLoop's finally to release the reader lock before we close.
@@ -738,30 +765,71 @@
         await fwSleep(400);
     }
 
-    // After flashing the board re-enumerates on the new firmware. getPorts() needs
-    // no user gesture (unlike requestPort), so poll it and reopen the SillyGoose.
-    async function fwTryAutoReconnect(timeoutMs = 12000) {
-        const deadline = Date.now() + timeoutMs;
-        while (Date.now() < deadline) {
-            try {
-                for (const p of await navigator.serial.getPorts()) {
-                    const info = (p.getInfo && p.getInfo()) || {};
-                    if (info.usbVendorId !== 0x239A) continue;
-                    try {
-                        await p.open({ baudRate: 115200 });
-                        port = p;
-                        document.getElementById('connectBtn').style.display = 'none';
-                        document.getElementById('disconnectBtn').style.display = 'block';
-                        setSerialEnabled(true);
-                        keepReading = true;
-                        readLoop();
-                        return true;
-                    } catch (e) { /* not enumerated yet — keep polling */ }
+    // Open a candidate port and wire up the UI. Returns true on success.
+    async function fwAdoptPort(p) {
+        if (!p) return false;
+        const info = (p.getInfo && p.getInfo()) || {};
+        if (info.usbVendorId && info.usbVendorId !== 0x239A) return false; // skip only clearly non-Adafruit
+        // Reject the UF2 bootloader: it shares the vendor id but reports a
+        // different productId than the app we captured before flashing. Without
+        // this we grab the bootloader's CDC port, then the board resets into the
+        // app and the connection dies. If we never captured a PID (e.g. the board
+        // was flashed via double-tap while disconnected), fall through and try.
+        if (fwAppPid && info.usbProductId && info.usbProductId !== fwAppPid) return false;
+        try {
+            await p.open({ baudRate: 115200 });
+        } catch (e) { return false; }                          // not ready / wrong device — caller keeps trying
+        port = p;
+        document.getElementById('connectBtn').style.display = 'none';
+        document.getElementById('disconnectBtn').style.display = 'block';
+        setSerialEnabled(true);
+        keepReading = true;
+        readLoop();
+        return true;
+    }
+
+    // Aggressive best-effort auto-reconnect after flashing. getPorts() needs no
+    // user gesture (unlike requestPort), so we poll it hard. Two things matter:
+    //   1) We do NOT skip the pre-flash handle. After re-enumeration Chromium
+    //      usually hands back the SAME SerialPort object, so skipping it was why
+    //      auto-reconnect always failed. A genuinely dead handle just fails to
+    //      open and we retry.
+    //   2) We also listen for Web Serial's 'connect' event, which fires the moment
+    //      the re-enumerated (auto-authorized) board appears, and grab it directly.
+    // fwAdoptPort() rejects the UF2 bootloader (same vendor, different productId)
+    // so we wait for the app rather than grabbing the bootloader mid-reset.
+    // If everything fails, the caller falls back to the manual Reconnect button.
+    async function fwTryAutoReconnect(timeoutMs = 15000) {
+        fwReconnectCancel = false;
+
+        // Give the bootloader a moment to finish writing, reset, and let the app
+        // re-enumerate before we start grabbing ports — avoids racing the reset.
+        await fwSleep(1200);
+
+        let freshPort = null;
+        const onConnect = (e) => { freshPort = e.port || (e.target && e.target.port) || freshPort; };
+        navigator.serial.addEventListener('connect', onConnect);
+        try {
+            const deadline = Date.now() + timeoutMs;
+            while (Date.now() < deadline && !fwReconnectCancel) {
+                // The board just announced itself — try that handle first.
+                if (freshPort) {
+                    const p = freshPort; freshPort = null;
+                    if (await fwAdoptPort(p)) return true;
                 }
-            } catch (e) {}
-            await fwSleep(700);
+                // Otherwise try every authorized port (including the old handle).
+                let ports = [];
+                try { ports = await navigator.serial.getPorts(); } catch (e) {}
+                for (const p of ports) {
+                    if (fwReconnectCancel) return false;
+                    if (await fwAdoptPort(p)) return true;
+                }
+                await fwSleep(400);
+            }
+            return false;
+        } finally {
+            navigator.serial.removeEventListener('connect', onConnect);
         }
-        return false;
     }
 
     async function fwDoUpdate(isRetry) {
@@ -781,6 +849,7 @@
         }
 
         fwBusy = true;
+        fwAppPid = null;           // recaptured by the touch below (connected path only)
         document.getElementById('fw-update-btn').disabled = true;
         fwShowBtn('fw-retry-btn', false);
         fwShowBtn('fw-reconnect-btn', false);
@@ -810,13 +879,15 @@
                 return;
             }
 
-            // 4) Success — board reboots on the new firmware.
-            fwStatus('Firmware copied. Board is rebooting on the new firmware…', '#22c55e');
+            // 4) Success — board reboots on the new firmware. Offer the manual
+            // Reconnect button right away while we also try to auto-reconnect.
+            fwStatus('Firmware copied. Board is rebooting — reconnecting…', '#22c55e');
+            fwShowBtn('fw-reconnect-btn', true);
             if (await fwTryAutoReconnect()) {
+                fwShowBtn('fw-reconnect-btn', false);
                 fwStatus('Done — reconnected. Check Firmware Version under System Configuration.', '#22c55e');
-            } else {
-                fwStatus('Done. Click Reconnect to talk to the board.', '#22c55e');
-                fwShowBtn('fw-reconnect-btn', true);
+            } else if (!fwReconnectCancel) {
+                fwStatus('Firmware flashed. Click Reconnect to talk to the board.', '#22c55e');
             }
         } catch (e) {
             fwProgress(null);
@@ -832,17 +903,15 @@
         document.getElementById('fw-channel').onchange = fwPopulateVersions;
         document.getElementById('fw-update-btn').onclick = () => fwDoUpdate(false);
         document.getElementById('fw-retry-btn').onclick = () => { fwShowBtn('fw-retry-btn', false); fwDoUpdate(true); };
-        document.getElementById('fw-reconnect-btn').onclick = () => { fwShowBtn('fw-reconnect-btn', false); connect(); };
-
-        // Auto-detect V1/V2 from the USB product descriptor (never BOARD_NAME).
-        try {
-            const info = await window.sgFirmware.boardInfo();
-            const m = ((info && info.displayName) || '').match(/V(\d)/i);
-            if (m) {
-                document.getElementById('fw-variant').value = 'V' + m[1];
-                document.getElementById('fw-detected').textContent = `detected ${info.displayName}`;
-            }
-        } catch (e) {}
+        document.getElementById('fw-reconnect-btn').onclick = () => {
+            fwReconnectCancel = true;                 // stop any in-flight auto-reconnect
+            fwShowBtn('fw-reconnect-btn', false);
+            connect();                                // user gesture -> requestPort -> auto-select
+        };
+        // Re-detect the board variant whenever the tab is opened (the board may
+        // have been connected after the app started).
+        document.getElementById('fw-tab-btn').addEventListener('click', fwDetectVariant);
+        fwDetectVariant();
 
         // Download / copy progress streamed from the main process.
         window.sgFirmware.onProgress((p) => {
