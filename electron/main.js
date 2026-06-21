@@ -1,6 +1,16 @@
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const { execFile } = require('child_process');
 const { autoUpdater } = require('electron-updater');
+
+// Firmware releases (UF2) are published here by build-release.yml.
+const FIRMWARE_REPO = 'AerospaceNU/nuli-avionics-flight-software';
+
+// USB product descriptor ("SillyGooseV2") of the most recently selected port.
+// Used by the renderer to auto-detect the V1/V2 firmware variant. This is the
+// compile-time USB iProduct string, NOT the user-writable BOARD_NAME config.
+let lastBoardDisplayName = '';
 
 // Adafruit USB vendor ID. SillyGoose boards enumerate under Adafruit's VID and
 // set their USB product string to "SillyGoose" (platformio.ini board.name).
@@ -87,6 +97,7 @@ function createWindow() {
     autoHideMenuBar: true,
     backgroundColor: '#0f172a',
     webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false
@@ -105,6 +116,13 @@ function createWindow() {
     const allPorts = portList || [];
     const candidates = filterSillyGoosePorts(allPorts);
 
+    // Remember the chosen port's USB product string so the firmware tab can
+    // auto-detect the board variant (V1/V2).
+    const remember = (portId) => {
+      const p = allPorts.find((pp) => pp.portId === portId);
+      lastBoardDisplayName = (p && p.displayName) || '';
+    };
+
     // No SillyGoose detected: fall back to letting the user pick from every
     // available serial port (some boards may not surface a product string).
     if (candidates.length === 0) {
@@ -117,18 +135,21 @@ function createWindow() {
         return;
       }
       const chosen = await pickPortWithModal(win, allPorts, true);
+      if (chosen) remember(chosen);
       callback(chosen || '');
       return;
     }
 
     // Exactly one SillyGoose: connect without prompting.
     if (candidates.length === 1) {
+      remember(candidates[0].portId);
       callback(candidates[0].portId);
       return;
     }
 
     // More than one SillyGoose: let the user choose.
     const chosen = await pickPortWithModal(win, candidates, false);
+    if (chosen) remember(chosen);
     callback(chosen || '');
   });
 
@@ -187,6 +208,172 @@ function initAutoUpdater(win) {
 
   autoUpdater.checkForUpdates().catch((err) => console.error('update check failed:', err));
 }
+
+// ---------------------------------------------------------------------------
+// Firmware update (desktop-only)
+// ---------------------------------------------------------------------------
+
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Download URL for the V1/V2 (non-Sim) asset of a release. Asset names look like
+// SillyGooseV2.uf2 / SillyGooseV2_not_flight_tested.uf2 / SillyGooseV2_v1.00.uf2,
+// with SillyGooseV2Sim.uf2 variants we must exclude.
+function pickAsset(assets, n) {
+  const re = new RegExp(`^SillyGooseV${n}(?!Sim)`);
+  const a = (assets || []).find((x) => re.test(x.name));
+  return a ? a.browser_download_url : null;
+}
+
+// Group GitHub releases into the two firmware channels the UI offers.
+function normalizeReleases(releases) {
+  const flight = [];
+  const notFlightTested = [];
+  for (const r of releases) {
+    const tag = r.tag_name || '';
+    let channel;
+    if (tag === 'latest' || tag.startsWith('main-')) channel = flight;
+    else if (tag === 'not-flight-tested-latest' || tag.startsWith('not-flight-tested-')) channel = notFlightTested;
+    else continue;
+
+    const v1 = pickAsset(r.assets, 1);
+    const v2 = pickAsset(r.assets, 2);
+    if (!v1 && !v2) continue;
+
+    const isLatest = tag === 'latest' || tag === 'not-flight-tested-latest';
+    channel.push({
+      label: r.name || tag,
+      tag,
+      isLatest,
+      prerelease: !!r.prerelease,
+      publishedAt: r.published_at || '',
+      assets: { V1: v1, V2: v2 }
+    });
+  }
+  // Pin the rolling "latest" to the top, then newest-first by publish date.
+  const sortFn = (a, b) =>
+    a.isLatest ? -1 : b.isLatest ? 1 : b.publishedAt.localeCompare(a.publishedAt);
+  flight.sort(sortFn);
+  notFlightTested.sort(sortFn);
+  return { flight, notFlightTested };
+}
+
+// Removable UF2 bootloader drives, identified by INFO_UF2.TXT (label-independent,
+// mirrors build_tools/uf2conv.py get_drives()).
+function findUf2Drives() {
+  return new Promise((resolve) => {
+    if (process.platform === 'win32') {
+      const ps = '(Get-WmiObject Win32_LogicalDisk -Filter "FileSystem=\'FAT\'").DeviceID';
+      execFile('powershell', ['-NoProfile', '-Command', ps], (err, stdout) => {
+        if (err) return resolve([]);
+        const drives = stdout
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map((d) => (d.endsWith('\\') ? d : d + '\\'))
+          .filter((d) => fs.existsSync(path.join(d, 'INFO_UF2.TXT')));
+        resolve(drives);
+      });
+      return;
+    }
+    const user = process.env.USER || process.env.SUDO_USER || '';
+    const roots =
+      process.platform === 'darwin'
+        ? ['/Volumes']
+        : ['/media', '/run/media', `/media/${user}`, `/run/media/${user}`];
+    const found = [];
+    for (const root of roots) {
+      try {
+        for (const d of fs.readdirSync(root)) {
+          const full = path.join(root, d);
+          try {
+            if (fs.statSync(full).isDirectory() && fs.existsSync(path.join(full, 'INFO_UF2.TXT'))) {
+              found.push(full);
+            }
+          } catch {
+            /* unreadable entry */
+          }
+        }
+      } catch {
+        /* root doesn't exist */
+      }
+    }
+    resolve(found);
+  });
+}
+
+ipcMain.handle('firmware:board-info', () => ({ displayName: lastBoardDisplayName }));
+
+ipcMain.handle('firmware:list', async () => {
+  const res = await fetch(`https://api.github.com/repos/${FIRMWARE_REPO}/releases?per_page=100`, {
+    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'SillyGooseTool' }
+  });
+  if (!res.ok) throw new Error(`GitHub API returned ${res.status}`);
+  return normalizeReleases(await res.json());
+});
+
+ipcMain.handle('firmware:download', async (event, url) => {
+  if (typeof url !== 'string' || !url.startsWith('https://')) {
+    throw new Error('Invalid firmware URL.');
+  }
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'SillyGooseTool', Accept: 'application/octet-stream' }
+  });
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+
+  const total = Number(res.headers.get('content-length')) || 0;
+  const reader = res.body.getReader();
+  const chunks = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total) {
+      event.sender.send('firmware:progress', { phase: 'download', pct: Math.round((received / total) * 100) });
+    }
+  }
+  const buf = Buffer.concat(chunks);
+  // UF2 magic: first 32-bit word of the first block is 0x0A324655.
+  if (buf.length < 512 || buf.readUInt32LE(0) !== 0x0a324655) {
+    throw new Error('Downloaded file is not a valid UF2.');
+  }
+  const dir = path.join(app.getPath('temp'), 'sillygoose-fw');
+  fs.mkdirSync(dir, { recursive: true });
+  const name = (url.split('/').pop() || 'firmware.uf2').replace(/[^\w.\-]/g, '_');
+  const dest = path.join(dir, name);
+  fs.writeFileSync(dest, buf);
+  return dest;
+});
+
+ipcMain.handle('firmware:flash', async (event, uf2Path) => {
+  // Poll for the bootloader drive (it takes a couple seconds to mount after the
+  // 1200-baud touch / double-tap).
+  const deadline = Date.now() + 15000;
+  let drive = null;
+  while (Date.now() < deadline) {
+    const drives = await findUf2Drives();
+    if (drives.length) {
+      drive = drives[0];
+      break;
+    }
+    event.sender.send('firmware:progress', { phase: 'waiting' });
+    await delay(800);
+  }
+  if (!drive) return { ok: false, reason: 'no-drive' };
+
+  event.sender.send('firmware:progress', { phase: 'copying', drive });
+  try {
+    await fs.promises.copyFile(uf2Path, path.join(drive, path.basename(uf2Path)));
+  } catch (err) {
+    // The bootloader can reboot and yank the drive mid-copy; that's usually a
+    // successful flash, so only treat it as an error if the drive is still there.
+    if (fs.existsSync(path.join(drive, 'INFO_UF2.TXT'))) {
+      return { ok: false, reason: 'copy-failed', detail: String(err) };
+    }
+  }
+  return { ok: true, drive };
+});
 
 app.whenReady().then(createWindow);
 

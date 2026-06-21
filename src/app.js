@@ -671,3 +671,194 @@
             sendCmd(e.target.dataset.cmd);
         }
     });
+
+    // ===================== Firmware update (desktop app only) =====================
+    // window.sgFirmware is exposed by electron/preload.js. In a plain browser it is
+    // undefined, so the Firmware tab stays hidden and this code never runs.
+
+    const fwSleep = (ms) => new Promise(r => setTimeout(r, ms));
+    let fwReleases = null;   // { flight: [...], notFlightTested: [...] }
+    let fwBusy = false;
+
+    function fwStatus(msg, color = '#cbd5e1') {
+        const el = document.getElementById('fw-status');
+        if (el) { el.textContent = msg; el.style.color = color; }
+    }
+    function fwProgress(pct) {
+        const wrap = document.getElementById('fw-progress-wrap');
+        const bar = document.getElementById('fw-progress-bar');
+        if (!wrap || !bar) return;
+        if (pct == null) { wrap.style.display = 'none'; return; }
+        wrap.style.display = 'block';
+        bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    }
+    function fwShowBtn(id, show) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = show ? '' : 'none';
+    }
+
+    function fwPopulateVersions() {
+        const channel = document.getElementById('fw-channel').value;
+        const sel = document.getElementById('fw-version');
+        const list = (fwReleases && fwReleases[channel]) || [];
+        sel.innerHTML = '';
+        if (!list.length) { sel.innerHTML = '<option value="">(none available)</option>'; return; }
+        list.forEach((r, i) => {
+            const opt = document.createElement('option');
+            opt.value = String(i);
+            opt.textContent = r.isLatest ? `Latest — ${r.label}` : r.label;
+            sel.appendChild(opt);
+        });
+        sel.value = '0';
+    }
+
+    function fwSelectedAssetUrl() {
+        const channel = document.getElementById('fw-channel').value;
+        const variant = document.getElementById('fw-variant').value;
+        const idx = parseInt(document.getElementById('fw-version').value, 10);
+        const rel = ((fwReleases && fwReleases[channel]) || [])[idx];
+        return rel ? (rel.assets[variant] || null) : null;
+    }
+
+    // 1200-baud touch: reset the SAMD21 into its UF2 bootloader using the
+    // currently-connected port, then release it. Mirrors the Arduino touch1200.
+    async function fwEnterBootloaderViaTouch() {
+        const p = port;
+        if (!p) return;
+        keepReading = false;                                   // stop readLoop re-grabbing the reader
+        if (reader) { try { await reader.cancel(); } catch (e) {} }
+        // Wait for readLoop's finally to release the reader lock before we close.
+        for (let i = 0; i < 25 && p.readable && p.readable.locked; i++) await fwSleep(30);
+        try { await p.close(); } catch (e) {}
+        forceUIDisconnect();                                   // clears global `port` + UI; `p` still valid
+        await fwSleep(250);
+        await p.open({ baudRate: 1200 });                      // the touch
+        await fwSleep(150);
+        try { await p.close(); } catch (e) {}                  // close at 1200 -> board jumps to bootloader
+        await fwSleep(400);
+    }
+
+    // After flashing the board re-enumerates on the new firmware. getPorts() needs
+    // no user gesture (unlike requestPort), so poll it and reopen the SillyGoose.
+    async function fwTryAutoReconnect(timeoutMs = 12000) {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            try {
+                for (const p of await navigator.serial.getPorts()) {
+                    const info = (p.getInfo && p.getInfo()) || {};
+                    if (info.usbVendorId !== 0x239A) continue;
+                    try {
+                        await p.open({ baudRate: 115200 });
+                        port = p;
+                        document.getElementById('connectBtn').style.display = 'none';
+                        document.getElementById('disconnectBtn').style.display = 'block';
+                        setSerialEnabled(true);
+                        keepReading = true;
+                        readLoop();
+                        return true;
+                    } catch (e) { /* not enumerated yet — keep polling */ }
+                }
+            } catch (e) {}
+            await fwSleep(700);
+        }
+        return false;
+    }
+
+    async function fwDoUpdate(isRetry) {
+        if (fwBusy) return;
+        const url = fwSelectedAssetUrl();
+        if (!url) { fwStatus('No firmware available for that selection.', '#ef4444'); return; }
+        const variant = document.getElementById('fw-variant').value;
+        const channel = document.getElementById('fw-channel').value;
+        const connected = !!port;
+
+        if (!isRetry) {
+            const how = connected
+                ? 'The board will be reset into its bootloader automatically.'
+                : 'Your board is not connected — you will need to double-tap the RESET button.';
+            const warn = channel === 'notFlightTested' ? '\n\n⚠ This is a NOT-FLIGHT-TESTED build.' : '';
+            if (!confirm(`Flash ${variant} firmware?\n\n${how}${warn}`)) return;
+        }
+
+        fwBusy = true;
+        document.getElementById('fw-update-btn').disabled = true;
+        fwShowBtn('fw-retry-btn', false);
+        fwShowBtn('fw-reconnect-btn', false);
+        try {
+            // 1) Download first — the board stays untouched if this fails.
+            fwStatus('Downloading firmware…');
+            const uf2Path = await window.sgFirmware.download(url);
+
+            // 2) Enter the bootloader (auto touch when connected, else manual).
+            if (connected) {
+                fwStatus('Resetting board into bootloader…');
+                await fwEnterBootloaderViaTouch();
+            } else {
+                fwStatus('Double-tap the RESET button on your board now…');
+            }
+
+            // 3) Wait for FEATHERBOOT and copy the .uf2.
+            const result = await window.sgFirmware.waitAndFlash(uf2Path);
+            fwProgress(null);
+            if (!result.ok) {
+                if (result.reason === 'no-drive') {
+                    fwStatus('Bootloader drive not found. Double-tap RESET on the board, then click Retry.', '#f59e0b');
+                    fwShowBtn('fw-retry-btn', true);
+                } else {
+                    fwStatus('Flash failed: ' + (result.detail || result.reason), '#ef4444');
+                }
+                return;
+            }
+
+            // 4) Success — board reboots on the new firmware.
+            fwStatus('Firmware copied. Board is rebooting on the new firmware…', '#22c55e');
+            if (await fwTryAutoReconnect()) {
+                fwStatus('Done — reconnected. Check Firmware Version under System Configuration.', '#22c55e');
+            } else {
+                fwStatus('Done. Click Reconnect to talk to the board.', '#22c55e');
+                fwShowBtn('fw-reconnect-btn', true);
+            }
+        } catch (e) {
+            fwProgress(null);
+            fwStatus('Update error: ' + e.message, '#ef4444');
+        } finally {
+            fwBusy = false;
+            document.getElementById('fw-update-btn').disabled = false;
+        }
+    }
+
+    async function initFirmware() {
+        document.getElementById('fw-tab-btn').style.display = '';   // reveal the tab (hidden in browser)
+        document.getElementById('fw-channel').onchange = fwPopulateVersions;
+        document.getElementById('fw-update-btn').onclick = () => fwDoUpdate(false);
+        document.getElementById('fw-retry-btn').onclick = () => { fwShowBtn('fw-retry-btn', false); fwDoUpdate(true); };
+        document.getElementById('fw-reconnect-btn').onclick = () => { fwShowBtn('fw-reconnect-btn', false); connect(); };
+
+        // Auto-detect V1/V2 from the USB product descriptor (never BOARD_NAME).
+        try {
+            const info = await window.sgFirmware.boardInfo();
+            const m = ((info && info.displayName) || '').match(/V(\d)/i);
+            if (m) {
+                document.getElementById('fw-variant').value = 'V' + m[1];
+                document.getElementById('fw-detected').textContent = `detected ${info.displayName}`;
+            }
+        } catch (e) {}
+
+        // Download / copy progress streamed from the main process.
+        window.sgFirmware.onProgress((p) => {
+            if (p.phase === 'download') { fwProgress(p.pct); fwStatus(`Downloading firmware… ${p.pct}%`); }
+            else if (p.phase === 'waiting') { fwStatus('Waiting for the bootloader drive (FEATHERBOOT)…'); }
+            else if (p.phase === 'copying') { fwProgress(null); fwStatus(`Copying firmware to ${p.drive}…`); }
+        });
+
+        try {
+            fwStatus('Loading available firmware…');
+            fwReleases = await window.sgFirmware.listReleases();
+            fwPopulateVersions();
+            fwStatus('');
+        } catch (e) {
+            fwStatus('Could not load firmware list: ' + e.message, '#ef4444');
+        }
+    }
+
+    window.addEventListener('load', () => { if (window.sgFirmware) initFirmware(); });

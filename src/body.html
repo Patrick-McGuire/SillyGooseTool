@@ -44,6 +44,7 @@
             <button class="tab-btn active" onclick="openTab('flight-tab')">Flight Data</button>
             <button class="tab-btn" onclick="openTab('live-tab')">Live Stream</button>
             <button class="tab-btn" onclick="openTab('config-tab')">System Configuration</button>
+            <button class="tab-btn" id="fw-tab-btn" onclick="openTab('firmware-tab')" style="display:none">Firmware</button>
         </div>
         <div class="header-right">
             <div id="busy-loader" class="loader"></div>
@@ -108,6 +109,47 @@
             <button class="btn btn-warn ctrl-btn" data-cmd="--fire -m" disabled>Fire Main</button>
         </div>
         <div class="config-grid" id="config-fields"></div>
+    </div>
+
+    <div id="firmware-tab" class="tab-content">
+        <div class="fw-panel">
+            <div style="font-size: 0.75rem; color: #94a3b8;">FIRMWARE UPDATE</div>
+            <div style="font-size:0.8rem; color:#cbd5e1; line-height:1.45;">
+                Updates the firmware on your SillyGoose. The board is reset into its bootloader,
+                the selected build is copied over, and it restarts on the new firmware.
+            </div>
+
+            <div class="fw-field">
+                <label class="fw-label">Channel</label>
+                <select id="fw-channel">
+                    <option value="flight">Flight (stable)</option>
+                    <option value="notFlightTested">Not Flight Tested</option>
+                </select>
+            </div>
+            <div class="fw-field">
+                <label class="fw-label">Version</label>
+                <select id="fw-version"></select>
+            </div>
+            <div class="fw-field">
+                <label class="fw-label">Board</label>
+                <select id="fw-variant">
+                    <option value="V1">SillyGoose V1</option>
+                    <option value="V2">SillyGoose V2</option>
+                </select>
+                <span id="fw-detected" style="font-size:0.7rem; color:#94a3b8;"></span>
+            </div>
+
+            <div style="display:flex; gap:10px; align-items:center; margin-top:4px;">
+                <button id="fw-update-btn" class="btn" style="width:170px">Update Firmware</button>
+                <button id="fw-reconnect-btn" class="btn btn-secondary" style="display:none; width:120px">Reconnect</button>
+                <button id="fw-retry-btn" class="btn btn-warn" style="display:none; width:90px">Retry</button>
+            </div>
+
+            <div id="fw-progress-wrap" style="display:none; background:#111827; border:1px solid var(--border); border-radius:6px; height:10px; overflow:hidden;">
+                <div id="fw-progress-bar" style="height:100%; width:0%; background:var(--accent); transition:width .15s;"></div>
+            </div>
+            <div id="fw-status" style="font-size:0.8rem; color:#cbd5e1; min-height:1.2em;"></div>
+        </div>
     </div>
 
     <div id="terminal"></div>

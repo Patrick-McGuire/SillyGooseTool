@@ -88,6 +88,15 @@
         .series-opt { font-size: 0.85rem; display: flex; align-items: center; gap: 10px; cursor: pointer; color: #cbd5e1; }
 
         #flight-list { flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: #0f172a; min-height: 150px; }
+
+        /* Firmware tab */
+        .fw-panel { max-width: 560px; display: flex; flex-direction: column; gap: 14px; }
+        .fw-field { display: flex; align-items: center; gap: 10px; }
+        .fw-label { width: 70px; font-size: 0.75rem; color: #94a3b8; }
+        #firmware-tab select {
+            background: #111827; border: 1px solid var(--border); color: white;
+            padding: 8px; border-radius: 6px; min-width: 280px; font-size: 0.8rem;
+        }
         .flight-item { padding: 5px 10px; border-bottom: 1px solid var(--border); cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; height: 40px; box-sizing: border-box; }
         .flight-item.active { background: #1e293b; border-left: 4px solid var(--accent); }
         .del-btn {
