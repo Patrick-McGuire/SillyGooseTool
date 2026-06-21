@@ -44,7 +44,7 @@
             <button class="tab-btn active" onclick="openTab('flight-tab')">Flight Data</button>
             <button class="tab-btn" onclick="openTab('live-tab')">Live Stream</button>
             <button class="tab-btn" onclick="openTab('config-tab')">System Configuration</button>
-            <button class="tab-btn" id="fw-tab-btn" onclick="openTab('firmware-tab')" style="display:none">Firmware</button>
+            <button class="tab-btn" id="fw-tab-btn" onclick="openTab('firmware-tab')">Firmware</button>
         </div>
         <div class="header-right">
             <div id="busy-loader" class="loader"></div>
@@ -117,6 +117,14 @@
             <div style="font-size:0.8rem; color:#cbd5e1; line-height:1.45;">
                 Updates the firmware on your SillyGoose. The board is reset into its bootloader,
                 the selected build is copied over, and it restarts on the new firmware.
+            </div>
+
+            <!-- Shown only in the browser build, where USB flashing isn't available. -->
+            <div id="fw-desktop-only" style="display:none; font-size:0.8rem; color:#f59e0b; border:1px solid #f59e0b55; background:#f59e0b11; border-radius:6px; padding:8px 10px; line-height:1.45;">
+                ⚠ Firmware updates only work in the SillyGooseTool <b>desktop app</b> — this web
+                version can't access USB to flash your board.
+                <a href="https://github.com/Patrick-McGuire/SillyGooseTool/releases/latest" target="_blank" style="color:#f59e0b; text-decoration:underline;">Download the desktop app</a>
+                to update firmware.
             </div>
 
             <div class="fw-field">

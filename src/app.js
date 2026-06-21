@@ -898,8 +898,20 @@
         }
     }
 
+    // Browser build: the Firmware tab is visible but USB flashing isn't possible
+    // (no window.sgFirmware). Gray the panel out and explain it's desktop-only.
+    function initFirmwareDisabled() {
+        const notice = document.getElementById('fw-desktop-only');
+        if (notice) notice.style.display = '';
+        ['fw-channel', 'fw-version', 'fw-variant', 'fw-update-btn'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) el.disabled = true;
+        });
+        const panel = document.querySelector('#firmware-tab .fw-panel');
+        if (panel) panel.style.opacity = '0.6';
+    }
+
     async function initFirmware() {
-        document.getElementById('fw-tab-btn').style.display = '';   // reveal the tab (hidden in browser)
         document.getElementById('fw-channel').onchange = fwPopulateVersions;
         document.getElementById('fw-update-btn').onclick = () => fwDoUpdate(false);
         document.getElementById('fw-retry-btn').onclick = () => { fwShowBtn('fw-retry-btn', false); fwDoUpdate(true); };
@@ -930,4 +942,9 @@
         }
     }
 
-    window.addEventListener('load', () => { if (window.sgFirmware) initFirmware(); });
+    // Run as soon as the DOM is ready (not on 'load', which waits for the whole
+    // ~3.75 MB inlined bundle — Plotly etc. — to finish). The tab is always shown;
+    // the desktop app wires it up, the browser build grays it out.
+    function fwInit() { if (window.sgFirmware) initFirmware(); else initFirmwareDisabled(); }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fwInit);
+    else fwInit();
