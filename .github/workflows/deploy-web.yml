@@ -1,0 +1,59 @@
+name: Deploy web build to GitHub Pages
+
+# Builds the single-file web app from src/ and publishes it into the
+# Patrick-McGuire.github.io repo so https://patrick-mcguire.github.io/sillygoose/
+# keeps serving the latest build. SillyGooseTool stays the single source of truth.
+#
+# Requires repo secret PAGES_DEPLOY_TOKEN: a fine-grained PAT with
+# "Contents: read and write" on the Patrick-McGuire.github.io repository.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'build.mjs'
+      - '.github/workflows/deploy-web.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout SillyGooseTool
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build web app
+        run: node build.mjs
+
+      - name: Checkout Pages repo
+        uses: actions/checkout@v4
+        with:
+          repository: Patrick-McGuire/Patrick-McGuire.github.io
+          token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+          path: pages
+
+      - name: Copy build into sillygoose/
+        run: |
+          mkdir -p pages/sillygoose
+          cp dist/index.html pages/sillygoose/index.html
+          cp dist/manifest.webmanifest pages/sillygoose/manifest.webmanifest
+          cp dist/service-worker.js pages/sillygoose/service-worker.js
+
+      - name: Commit and push
+        run: |
+          cd pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- sillygoose; then
+            echo "No changes to sillygoose/ — nothing to deploy."
+            exit 0
+          fi
+          git add sillygoose
+          git commit -m "Deploy sillygoose web build from SillyGooseTool@${GITHUB_SHA::7}"
+          git push

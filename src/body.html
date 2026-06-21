@@ -1,0 +1,118 @@
+<div id="series-modal">
+    <div class="modal-box">
+        <h3 style="margin-top:0">Graph Series Selection</h3>
+        <div class="series-list" id="series-picker"></div>
+        <button class="btn" onclick="closeSeriesModal()">Apply & Close</button>
+    </div>
+</div>
+
+<div id="config-modal">
+    <div class="modal-box">
+        <h3 style="margin-top:0">Flight Configuration</h3>
+        <div id="config-content" style="font-size:0.8rem; margin-bottom:15px;"></div>
+        <button class="btn" onclick="closeConfigModal()">Close</button>
+    </div>
+</div>
+
+<div id="sidebar">
+    <div class="logo-container">
+        <img class="logo-img" src="{{LOGO_DATA_URI}}" alt="Logo">
+        <div class="logo-text-group">
+            <button id="connectBtn" class="btn">Connect Device</button>
+            <button id="disconnectBtn" class="btn btn-danger" style="display:none">Disconnect Port</button>
+        </div>
+    </div>
+
+    <div style="font-size: 0.75rem; color: #94a3b8; margin-top:10px;">SESSION FLIGHTS</div>
+    <label style="display:flex; align-items:center; gap:6px; font-size:0.7rem; color:#94a3b8; margin:4px 0; cursor:pointer;">
+        <input type="checkbox" id="filter-flightstate"> Only logs with ASCENT/DESCENT
+    </label>
+    <div id="flight-list"></div>
+
+    <div class="sidebar-actions">
+        <button id="downloadZipBtn" class="btn btn-secondary" disabled>Download All (ZIP)</button>
+        <button id="clearAllBtn" class="btn btn-danger">Clear Session</button>
+        <input type="file" id="file-upload" style="display:none">
+        <label for="file-upload" class="btn btn-secondary" style="display: flex; align-items: center; justify-content: center; cursor: pointer;">Load Local File</label>
+        <button id="saveFileBtn" class="btn btn-secondary" disabled>Download Selected</button>
+    </div>
+</div>
+
+<div id="main-content">
+    <header>
+        <div class="tabs">
+            <button class="tab-btn active" onclick="openTab('flight-tab')">Flight Data</button>
+            <button class="tab-btn" onclick="openTab('live-tab')">Live Stream</button>
+            <button class="tab-btn" onclick="openTab('config-tab')">System Configuration</button>
+        </div>
+        <div class="header-right">
+            <div id="busy-loader" class="loader"></div>
+        </div>
+    </header>
+
+    <div id="flight-tab" class="tab-content active">
+        <div class="stats-grid">
+            <div class="stat-card"><div id="stat-alt" class="stat-val">0</div><div style="font-size:0.6rem">MAX ALT (m)</div></div>
+            <div class="stat-card"><div id="stat-vel" class="stat-val">0</div><div style="font-size:0.6rem">MAX VEL (m/s)</div></div>
+            <div class="stat-card"><div id="stat-state" class="stat-val">-</div><div style="font-size:0.6rem">FINAL STATE</div></div>
+            <div class="stat-card">
+                <button id="offloadBtn" class="btn btn-secondary" disabled style="height:45%; font-size:0.6rem; margin-bottom:2px; padding:2px">Offload (Text)</button>
+                <button id="offloadBinBtn" class="btn btn-secondary" disabled style="height:45%; font-size:0.6rem; padding:2px">Offload (Binary)</button>
+            </div>
+            <div class="stat-card"><button class="btn btn-secondary" style="height:100%; font-size:0.7rem; padding:2px" onclick="openSeriesModal()">Select Series</button></div>
+            <div class="stat-card"><button class="btn btn-secondary" style="height:100%; font-size:0.7rem; padding:2px" onclick="openConfigModal()">View Config</button></div>
+        </div>
+        <div id="hover-dashboard" class="hover-dashboard">
+            <div style="color: #64748b; font-style: italic;">Hover over the chart to see data...</div>
+        </div>
+        <div id="plot-container"></div>
+    </div>
+
+    <div id="live-tab" class="tab-content">
+        <div class="stats-grid">
+            <div class="stat-card"><button class="btn btn-secondary" style="height:100%; font-size: 0.75rem;" onclick="openSeriesModal()">Select Series</button></div>
+            <div class="stat-card">
+                <button id="streamStartBtn" class="btn btn-secondary" style="height:45%; font-size:0.6rem; margin-bottom:2px" disabled onclick="sendCmd('--streamLog -b')">Start Stream</button>
+                <button id="streamStopBtn" class="btn btn-danger" style="height:45%; font-size:0.6rem" disabled onclick="sendCmd('--streamLog -e')">Stop Stream</button>
+            </div>
+            <div class="stat-card">
+                <div style="font-size: 0.6rem; color: #94a3b8; margin-bottom: 2px;">HISTORY: <span id="hist-val">200</span></div>
+                <input type="range" id="history-slider" min="50" max="1000" value="200" style="width:100%">
+            </div>
+            <div class="stat-card">
+                <button id="logStartBtn" class="btn btn-warn" style="height:45%; font-size:0.6rem; margin-bottom:2px" disabled onclick="sendCmd('--log -b')">Log Enable</button>
+                <button id="logStopBtn" class="btn btn-secondary" style="height:45%; font-size:0.6rem" disabled onclick="sendCmd('--log -e')">Log Disable</button>
+            </div>
+            <div class="stat-card" style="font-size:0.6rem; text-align:left; color:#94a3b8; line-height:1.2">
+                Entries: <span id="log-entries" style="color:white">-</span><br>
+                Remaining: <span id="log-rem" style="color:white">-</span><br>
+                Status: <span id="log-status" style="color:white">-</span>
+                <button id="logHealthBtn" class="btn btn-secondary" style="height:18px; font-size:0.55rem; margin-top:3px" disabled onclick="sendCmd('--log')">Health</button>
+            </div>
+        </div>
+        <div id="live-hover-dashboard" class="hover-dashboard">
+            <div style="color: #64748b; font-style: italic;">Hover over the chart to see data...</div>
+        </div>
+        <div id="live-plot-container"></div>
+    </div>
+
+    <div id="config-tab" class="tab-content">
+        <div style="display:flex; justify-content: space-between; align-items: center;">
+            <div style="font-size: 0.75rem; color: #94a3b8;">SYSTEM COMMANDS</div>
+            <button id="getAllBtn" class="btn btn-secondary" style="width:120px; font-size:0.7rem; height:30px" disabled>Get All Configs</button>
+        </div>
+        <div class="config-row">
+            <button class="btn btn-danger" id="eraseBtn" disabled onclick="confirmErase()">Erase Flash</button>
+            <button class="btn btn-warn ctrl-btn" data-cmd="--reset" disabled>Reset Board</button>
+            <button class="btn btn-warn ctrl-btn" data-cmd="--fire -d" disabled>Fire Drogue</button>
+            <button class="btn btn-warn ctrl-btn" data-cmd="--fire -m" disabled>Fire Main</button>
+        </div>
+        <div class="config-grid" id="config-fields"></div>
+    </div>
+
+    <div id="terminal"></div>
+    <div style="display:flex; gap:10px">
+        <input type="text" id="cmd-input" placeholder="Manually enter command..." style="flex-grow:1; background:#111827; border:1px solid var(--border); color:white; padding:10px; border-radius:6px">
+        <button id="sendBtn" class="btn" style="width:100px" disabled>Send</button>
+    </div>
+</div>

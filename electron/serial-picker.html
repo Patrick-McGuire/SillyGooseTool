@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Select SillyGoose</title>
+<style>
+  :root {
+    --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --muted: #94a3b8;
+    --accent: #38bdf8; --border: #334155;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    display: flex; flex-direction: column; padding: 18px; gap: 14px;
+    -webkit-user-select: none; user-select: none;
+  }
+  h1 { font-size: 1.05rem; margin: 0; }
+  p.sub { margin: 0; font-size: 0.8rem; color: var(--muted); }
+  #list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex: 1; }
+  .device {
+    text-align: left; cursor: pointer; border: 1px solid var(--border);
+    background: var(--card); color: var(--text); border-radius: 10px;
+    padding: 12px 14px; transition: border-color .12s, background .12s;
+  }
+  .device:hover, .device:focus {
+    border-color: var(--accent); background: #243049; outline: none;
+  }
+  .device .name { font-weight: 600; font-size: 0.92rem; }
+  .device .meta { font-size: 0.72rem; color: var(--muted); margin-top: 3px; }
+  .actions { display: flex; justify-content: flex-end; }
+  .cancel {
+    cursor: pointer; background: transparent; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 16px;
+    font-size: 0.82rem;
+  }
+  .cancel:hover { color: var(--text); border-color: var(--muted); }
+</style>
+</head>
+<body>
+  <div>
+    <h1 id="title">Select your SillyGoose</h1>
+    <p class="sub" id="subtitle">Multiple SillyGoose boards are connected. Choose one to connect.</p>
+  </div>
+  <div id="list"></div>
+  <div class="actions">
+    <button class="cancel" id="cancel">Cancel</button>
+  </div>
+<script>
+  const list = document.getElementById('list');
+  document.getElementById('cancel').addEventListener('click', () => window.picker.cancel());
+
+  window.picker.onDevices((payload) => {
+    const devices = payload.devices || [];
+    if (payload.fallback) {
+      document.getElementById('title').textContent = 'Select a serial device';
+      document.getElementById('subtitle').textContent =
+        'No SillyGoose board was recognized. Choose a serial port to connect anyway.';
+    }
+    list.innerHTML = '';
+    devices.forEach((d, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'device';
+      btn.innerHTML =
+        '<div class="name"></div><div class="meta"></div>';
+      btn.querySelector('.name').textContent = d.displayName;
+      btn.querySelector('.meta').textContent = [d.portName, d.portId].filter(Boolean).join('  -  ');
+      btn.addEventListener('click', () => window.picker.choose(d.portId));
+      if (i === 0) setTimeout(() => btn.focus(), 0);
+      list.appendChild(btn);
+    });
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') window.picker.cancel();
+  });
+</script>
+</body>
+</html>

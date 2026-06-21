@@ -1,0 +1,112 @@
+        :root {
+            --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc;
+            --accent: #38bdf8; --success: #22c55e; --danger: #ef4444;
+            --border: #334155; --sidebar-w: 240px;
+        }
+        body {
+            font-family: 'Inter', sans-serif; background-color: var(--bg-color);
+            color: var(--text-main); margin: 0; display: flex; height: 100vh; overflow: hidden;
+        }
+        #sidebar {
+            width: var(--sidebar-w); flex-shrink: 0; background-color: var(--card-bg);
+            border-right: 1px solid var(--border); display: flex; flex-direction: column;
+            padding: 20px; gap: 15px; box-sizing: border-box;
+        }
+        #main-content { flex-grow: 1; display: flex; flex-direction: column; padding: 12px 16px; gap: 6px; overflow-y: auto; }
+
+        header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+        .header-right { display: flex; align-items: center; gap: 15px; }
+
+        /* Updated Logo Layout - Stacked & Full Width */
+        .logo-container {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 5px;
+        }
+        .logo-img {
+            width: 50%;
+            align-self: center;
+            height: auto;
+            border-radius: 8px;
+            object-fit: contain;
+        }
+        .logo-text-group {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+        }
+
+        .loader {
+            width: 20px; height: 20px; border: 3px solid var(--border);
+            border-bottom-color: var(--accent); border-radius: 50%;
+            display: none; animation: rotation 1s linear infinite;
+        }
+        @keyframes rotation { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        .tabs { display: flex; gap: 10px; }
+        .tab-btn {
+            padding: 10px 20px; border: none; background: none; color: #94a3b8;
+            cursor: pointer; font-weight: 600; border-bottom: 2px solid transparent;
+        }
+        .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+        .tab-content { display: none; flex-direction: column; gap: 10px; flex-grow: 1; }
+        .tab-content.active { display: flex; }
+
+        .config-row { display: flex; gap: 10px; margin-bottom: 10px; }
+        .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .config-item { background: #111827; padding: 10px; border-radius: 6px; border: 1px solid var(--border); }
+        .config-label { font-size: 0.7rem; color: #94a3b8; margin-bottom: 5px; text-transform: uppercase; }
+        .config-input-group { display: flex; gap: 5px; }
+        .config-input-group input {
+            background: #0f172a; border: 1px solid var(--border); color: white;
+            padding: 5px; border-radius: 4px; flex-grow: 1; width: 50px; font-size: 0.85rem;
+        }
+
+        .btn {
+            background-color: var(--accent); color: var(--bg-color); border: none;
+            padding: 10px; border-radius: 6px; font-weight: 600; cursor: pointer; width: 100%;
+            height: 40px; display: flex; align-items: center; justify-content: center;
+            box-sizing: border-box; text-align: center;
+        }
+        .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .btn-secondary { background-color: var(--border); color: white; }
+        .btn-danger { background-color: var(--danger); color: white; }
+        .btn-warn { background-color: #f59e0b; color: black; }
+
+        .sidebar-actions { display: flex; flex-direction: column; gap: 8px; margin-top: auto; }
+
+        #series-modal, #config-modal {
+            display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); align-items: center; justify-content: center;
+        }
+        .modal-box {
+            background: var(--card-bg); padding: 20px; border-radius: 12px; width: 420px;
+            border: 1px solid var(--border); max-height: 80vh; overflow-y: auto;
+        }
+        .series-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 20px 0; }
+        .series-opt { font-size: 0.85rem; display: flex; align-items: center; gap: 10px; cursor: pointer; color: #cbd5e1; }
+
+        #flight-list { flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: #0f172a; min-height: 150px; }
+        .flight-item { padding: 5px 10px; border-bottom: 1px solid var(--border); cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; height: 40px; box-sizing: border-box; }
+        .flight-item.active { background: #1e293b; border-left: 4px solid var(--accent); }
+        .del-btn {
+            background: #334155; color: #ef4444; border: none; border-radius: 4px;
+            width: 28px; height: 28px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 1.1rem;
+        }
+        .del-btn:hover { background: #ef4444; color: white; }
+
+        #plot-container, #live-plot-container { background-color: var(--card-bg); border-radius: 12px; flex-grow: 1; border: 1px solid var(--border); }
+        #terminal { background: #000; color: #00ff41; font-family: 'Courier New', monospace; padding: 12px; font-size: 0.75rem; overflow-y: auto; border-radius: 8px; height: 140px; border: 1px solid var(--border); line-height: 1.4; }
+
+        .stats-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+        .stat-card { background: var(--card-bg); padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); text-align: center; display: flex; flex-direction: column; justify-content: center; min-height: 38px; }
+        .stat-val { font-size: 0.95rem; font-weight: bold; color: var(--accent); line-height: 1.1; }
+
+        .hover-dashboard {
+            background: #111827; border: 1px solid var(--border); border-radius: 6px;
+            padding: 3px 8px; display: flex; flex-wrap: wrap; gap: 10px; min-height: 22px;
+            align-items: center; font-size: 0.75rem;
+        }
+        .hover-item { display: flex; gap: 5px; color: #94a3b8; }
+        .hover-val { color: var(--accent); font-weight: bold; }

@@ -2,42 +2,51 @@
   "name": "sillygoose-tool",
   "version": "1.0.0",
   "description": "SillyGoose Configuration and Flight Tool",
-  "main": "main.js",
-  "author": "Your Name",
+  "main": "electron/main.js",
+  "author": "Patrick McGuire",
   "license": "ISC",
   "type": "commonjs",
   "scripts": {
-    "start": "electron .",
-    "dist": "electron-builder --win"
+    "build:web": "node build.mjs",
+    "icon": "node make-icon.mjs",
+    "start": "npm run build:web && electron .",
+    "dist": "npm run build:web && electron-builder --win nsis"
   },
   "build": {
-    "appId": "com.sillygoose.config",
+    "appId": "com.sillygoose.tool",
     "productName": "SillyGooseTool",
     "directories": {
-      "output": "dist"
-    },
-    "win": {
-      "target": [
-        "portable"
-      ]
-    },
-    "linux": {
-      "target": ["AppImage"],
-      "category": "Utility"
-    },
-    "portable": {
-      "artifactName": "${productName}_Portable.${ext}"
+      "output": "release"
     },
     "files": [
-      "index.html",
-      "main.js",
-      "lib/**/*",
-      "image.png",
-      "Logo simple glasses.ico"
-    ]
+      "dist/index.html",
+      "electron/**/*",
+      "assets/icon.*"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "SillyGoose Tool"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility",
+      "icon": "assets/icon.png"
+    }
   },
   "devDependencies": {
     "electron": "^30.0.0",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "jimp": "^1.6.1",
+    "png-to-ico": "^2.1.8"
   }
 }
