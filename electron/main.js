@@ -232,7 +232,7 @@ function normalizeReleases(releases) {
     const tag = r.tag_name || '';
     let channel;
     if (tag === 'latest' || tag.startsWith('main-')) channel = flight;
-    else if (tag === 'not-flight-tested-latest' || tag.startsWith('not-flight-tested-')) channel = notFlightTested;
+    else if (tag === 'not-flight-tested-latest') channel = notFlightTested;
     else continue;
 
     const v1 = pickAsset(r.assets, 1);

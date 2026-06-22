@@ -706,7 +706,11 @@
         const sel = document.getElementById('fw-version');
         const list = (fwReleases && fwReleases[channel]) || [];
         sel.innerHTML = '';
-        if (!list.length) { sel.innerHTML = '<option value="">(none available)</option>'; return; }
+        if (!list.length) {
+            sel.innerHTML = '<option value="">(none available)</option>';
+            sel.disabled = true;
+            return;
+        }
         list.forEach((r, i) => {
             const opt = document.createElement('option');
             opt.value = String(i);
@@ -714,6 +718,7 @@
             sel.appendChild(opt);
         });
         sel.value = '0';
+        sel.disabled = list.length <= 1;
     }
 
     function fwSelectedAssetUrl() {
