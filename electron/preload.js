@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('sgFirmware', {
   boardInfo: () => ipcRenderer.invoke('firmware:board-info'),
   // Download a release asset to a temp file; returns the local path.
   download: (url) => ipcRenderer.invoke('firmware:download', url),
+  // Pick a local .uf2 file; returns { path, name } or null if canceled.
+  chooseLocalUf2: () => ipcRenderer.invoke('firmware:choose-local'),
   // Wait for the UF2 bootloader drive and copy the .uf2 onto it.
   waitAndFlash: (uf2Path) => ipcRenderer.invoke('firmware:flash', uf2Path),
   // Subscribe to progress events; returns an unsubscribe function.

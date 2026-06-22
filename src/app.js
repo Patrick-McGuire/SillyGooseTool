@@ -679,6 +679,7 @@
 
     const fwSleep = (ms) => new Promise(r => setTimeout(r, ms));
     let fwReleases = null;       // { flight: [...], notFlightTested: [...] }
+    let fwLocalUf2 = null;       // { path, name } when flashing a user-selected local file
     let fwBusy = false;
     let fwReconnectCancel = false; // set when the user clicks Reconnect manually
     let fwAppPid = null;           // USB productId of the app firmware (captured pre-flash);
@@ -718,7 +719,23 @@
             sel.appendChild(opt);
         });
         sel.value = '0';
-        sel.disabled = list.length <= 1;
+        sel.disabled = !!fwLocalUf2 || list.length <= 1;
+    }
+
+    function fwSetLocalUf2(file) {
+        fwLocalUf2 = file || null;
+        const usingLocal = !!fwLocalUf2;
+        const nameEl = document.getElementById('fw-local-name');
+        const clearBtn = document.getElementById('fw-local-clear-btn');
+        const channelEl = document.getElementById('fw-channel');
+        const variantEl = document.getElementById('fw-variant');
+
+        if (nameEl) nameEl.textContent = usingLocal ? fwLocalUf2.name : '';
+        fwShowBtn('fw-local-clear-btn', usingLocal);
+        if (clearBtn) clearBtn.disabled = false;
+        if (channelEl) channelEl.disabled = usingLocal;
+        if (variantEl) variantEl.disabled = usingLocal;
+        fwPopulateVersions();
     }
 
     function fwSelectedAssetUrl() {
@@ -839,8 +856,9 @@
 
     async function fwDoUpdate(isRetry) {
         if (fwBusy) return;
-        const url = fwSelectedAssetUrl();
-        if (!url) { fwStatus('No firmware available for that selection.', '#ef4444'); return; }
+        const localUf2 = fwLocalUf2;
+        const url = localUf2 ? null : fwSelectedAssetUrl();
+        if (!localUf2 && !url) { fwStatus('No firmware available for that selection.', '#ef4444'); return; }
         const variant = document.getElementById('fw-variant').value;
         const channel = document.getElementById('fw-channel').value;
         const connected = !!port;
@@ -850,7 +868,8 @@
                 ? 'The board will be reset into its bootloader automatically.'
                 : 'Your board is not connected — you will need to double-tap the RESET button.';
             const warn = channel === 'notFlightTested' ? '\n\n⚠ This is a NOT-FLIGHT-TESTED build.' : '';
-            if (!confirm(`Flash ${variant} firmware?\n\n${how}${warn}`)) return;
+            const source = localUf2 ? `local UF2 "${localUf2.name}"` : `${variant} firmware`;
+            if (!confirm(`Flash ${source}?\n\n${how}${localUf2 ? '' : warn}`)) return;
         }
 
         fwBusy = true;
@@ -859,9 +878,16 @@
         fwShowBtn('fw-retry-btn', false);
         fwShowBtn('fw-reconnect-btn', false);
         try {
+            let uf2Path;
+            if (localUf2) {
+                fwProgress(null);
+                fwStatus(`Using local firmware ${localUf2.name}...`);
+                uf2Path = localUf2.path;
+            } else {
             // 1) Download first — the board stays untouched if this fails.
             fwStatus('Downloading firmware…');
-            const uf2Path = await window.sgFirmware.download(url);
+            uf2Path = await window.sgFirmware.download(url);
+            }
 
             // 2) Enter the bootloader (auto touch when connected, else manual).
             if (connected) {
@@ -908,7 +934,7 @@
     function initFirmwareDisabled() {
         const notice = document.getElementById('fw-desktop-only');
         if (notice) notice.style.display = '';
-        ['fw-channel', 'fw-version', 'fw-variant', 'fw-update-btn'].forEach((id) => {
+        ['fw-channel', 'fw-version', 'fw-variant', 'fw-local-btn', 'fw-local-clear-btn', 'fw-update-btn'].forEach((id) => {
             const el = document.getElementById(id);
             if (el) el.disabled = true;
         });
@@ -918,6 +944,20 @@
 
     async function initFirmware() {
         document.getElementById('fw-channel').onchange = fwPopulateVersions;
+        document.getElementById('fw-local-btn').onclick = async () => {
+            try {
+                const file = await window.sgFirmware.chooseLocalUf2();
+                if (!file) return;
+                fwSetLocalUf2(file);
+                fwStatus(`Selected local firmware ${file.name}.`, '#22c55e');
+            } catch (e) {
+                fwStatus('Local UF2 error: ' + e.message, '#ef4444');
+            }
+        };
+        document.getElementById('fw-local-clear-btn').onclick = () => {
+            fwSetLocalUf2(null);
+            fwStatus('');
+        };
         document.getElementById('fw-update-btn').onclick = () => fwDoUpdate(false);
         document.getElementById('fw-retry-btn').onclick = () => { fwShowBtn('fw-retry-btn', false); fwDoUpdate(true); };
         document.getElementById('fw-reconnect-btn').onclick = () => {

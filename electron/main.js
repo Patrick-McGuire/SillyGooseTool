@@ -15,6 +15,7 @@ let lastBoardDisplayName = '';
 // Adafruit USB vendor ID. SillyGoose boards enumerate under Adafruit's VID and
 // set their USB product string to "SillyGoose" (platformio.ini board.name).
 const ADAFRUIT_VENDOR_ID = 0x239a; // 9114
+const UF2_MAGIC = 0x0a324655;
 
 // Electron reports vendorId as a *decimal* string ("9114") on Windows, but some
 // platforms/versions report hex ("239a"). Accept either so the match is robust.
@@ -215,6 +216,23 @@ function initAutoUpdater(win) {
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
+async function validateUf2Path(uf2Path) {
+  if (typeof uf2Path !== 'string' || !uf2Path.toLowerCase().endsWith('.uf2')) {
+    throw new Error('Selected file is not a .uf2 file.');
+  }
+  const file = await fs.promises.open(uf2Path, 'r');
+  try {
+    const header = Buffer.alloc(512);
+    const { bytesRead } = await file.read(header, 0, header.length, 0);
+    if (bytesRead < 512 || header.readUInt32LE(0) !== UF2_MAGIC) {
+      throw new Error('Selected file is not a valid UF2.');
+    }
+  } finally {
+    await file.close();
+  }
+  return path.resolve(uf2Path);
+}
+
 // Download URL for the V1/V2 (non-Sim) asset of a release. Asset names look like
 // SillyGooseV2.uf2 / SillyGooseV2_not_flight_tested.uf2 / SillyGooseV2_v1.00.uf2,
 // with SillyGooseV2Sim.uf2 variants we must exclude.
@@ -335,7 +353,7 @@ ipcMain.handle('firmware:download', async (event, url) => {
   }
   const buf = Buffer.concat(chunks);
   // UF2 magic: first 32-bit word of the first block is 0x0A324655.
-  if (buf.length < 512 || buf.readUInt32LE(0) !== 0x0a324655) {
+  if (buf.length < 512 || buf.readUInt32LE(0) !== UF2_MAGIC) {
     throw new Error('Downloaded file is not a valid UF2.');
   }
   const dir = path.join(app.getPath('temp'), 'sillygoose-fw');
@@ -346,7 +364,19 @@ ipcMain.handle('firmware:download', async (event, url) => {
   return dest;
 });
 
+ipcMain.handle('firmware:choose-local', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Choose UF2 firmware',
+    properties: ['openFile'],
+    filters: [{ name: 'UF2 firmware', extensions: ['uf2'] }]
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  const uf2Path = await validateUf2Path(result.filePaths[0]);
+  return { path: uf2Path, name: path.basename(uf2Path) };
+});
+
 ipcMain.handle('firmware:flash', async (event, uf2Path) => {
+  uf2Path = await validateUf2Path(uf2Path);
   // Poll for the bootloader drive (it takes a couple seconds to mount after the
   // 1200-baud touch / double-tap).
   const deadline = Date.now() + 15000;
