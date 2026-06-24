@@ -28,12 +28,31 @@ npm run build:web     # -> dist/index.html (open directly in a browser)
 npm run start         # build + launch the Electron app
 ```
 
-## Build the desktop installer
+## Build the desktop app
 
 ```bash
 npm run icon          # regenerate assets/icon.ico from assets/icon.png (only if the logo changed)
 npm run dist          # NSIS installer in release/
+npm run dist:linux    # AppImage in release/ (run this on Linux)
 ```
+
+## Linux AppImage install behavior
+
+The Linux release artifact is still a portable AppImage, but on first launch the
+packaged app offers to install itself for the current user. Accepting that prompt:
+
+- copies the AppImage to `~/.local/share/SillyGooseTool/SillyGooseTool.AppImage`
+  (or `$XDG_DATA_HOME/SillyGooseTool/SillyGooseTool.AppImage` when
+  `XDG_DATA_HOME` is set);
+- creates an app launcher at
+  `~/.local/share/applications/com.sillygoose.tool.desktop`;
+- installs the logo at
+  `~/.local/share/icons/hicolor/256x256/apps/com.sillygoose.tool.png`;
+- relaunches from the installed copy.
+
+That gives Linux desktops a searchable app entry with the SillyGoose icon, and
+future AppImage updates run against the stable installed copy instead of the file
+that happened to be in `Downloads`.
 
 ## Web deploy (GitHub Pages)
 

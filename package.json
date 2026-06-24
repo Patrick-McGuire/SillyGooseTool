@@ -1,6 +1,6 @@
 {
   "name": "sillygoose-tool",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "SillyGoose Configuration and Flight Tool",
   "main": "electron/main.js",
   "author": "Patrick McGuire",
@@ -11,6 +11,7 @@
     "icon": "node make-icon.mjs",
     "start": "npm run build:web && electron .",
     "dist": "npm run build:web && electron-builder --win nsis",
+    "dist:linux": "npm run build:web && electron-builder --linux AppImage",
     "release": "npm run build:web && electron-builder --publish always"
   },
   "build": {

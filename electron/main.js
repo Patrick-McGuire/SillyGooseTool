@@ -3,9 +3,14 @@ const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const { autoUpdater } = require('electron-updater');
+const { APP_ID, APP_NAME, PRODUCT_NAME, ensureLinuxAppImageIntegration } = require('./linux-appimage');
 
 // Firmware releases (UF2) are published here by build-release.yml.
 const FIRMWARE_REPO = 'AerospaceNU/nuli-avionics-flight-software';
+
+app.setName(APP_NAME);
+if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
+if (process.platform === 'linux') app.commandLine.appendSwitch('class', PRODUCT_NAME);
 
 // USB product descriptor ("SillyGooseV2") of the most recently selected port.
 // Used by the renderer to auto-detect the V1/V2 firmware variant. This is the
@@ -94,7 +99,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
     height: 850,
-    icon: path.join(__dirname, '..', 'assets', 'icon.ico'),
+    icon: path.join(__dirname, '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     autoHideMenuBar: true,
     backgroundColor: '#0f172a',
     webPreferences: {
@@ -405,7 +410,10 @@ ipcMain.handle('firmware:flash', async (event, uf2Path) => {
   return { ok: true, drive };
 });
 
-app.whenReady().then(createWindow);
+app.whenReady().then(async () => {
+  const relaunching = await ensureLinuxAppImageIntegration(path.join(__dirname, '..', 'assets'));
+  if (!relaunching) createWindow();
+});
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
