@@ -10,7 +10,10 @@ const FIRMWARE_REPO = 'AerospaceNU/nuli-avionics-flight-software';
 
 app.setName(APP_NAME);
 if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
-if (process.platform === 'linux') app.commandLine.appendSwitch('class', PRODUCT_NAME);
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('class', PRODUCT_NAME);
+  app.commandLine.appendSwitch('no-sandbox');
+}
 
 // USB product descriptor ("SillyGooseV2") of the most recently selected port.
 // Used by the renderer to auto-detect the V1/V2 firmware variant. This is the

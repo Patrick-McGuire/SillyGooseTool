@@ -8,6 +8,7 @@ const APP_ID = 'com.sillygoose.tool';
 const APP_NAME = 'SillyGoose Tool';
 const PRODUCT_NAME = 'SillyGooseTool';
 const APPIMAGE_NAME = `${PRODUCT_NAME}.AppImage`;
+const APPIMAGE_ARGS = ['--no-sandbox'];
 
 function getXdgPath(envName, fallback) {
   const configured = process.env[envName];
@@ -39,13 +40,14 @@ function quoteDesktopExecArg(value) {
 }
 
 function buildDesktopEntry(appImagePath) {
+  const execArgs = APPIMAGE_ARGS.join(' ');
   return [
     '[Desktop Entry]',
     'Version=1.0',
     'Type=Application',
     `Name=${APP_NAME}`,
     'Comment=SillyGoose Configuration and Flight Tool',
-    `Exec=${quoteDesktopExecArg(appImagePath)}`,
+    `Exec=${quoteDesktopExecArg(appImagePath)} ${execArgs}`,
     `Icon=${APP_ID}`,
     'Terminal=false',
     'Categories=Utility;',
@@ -111,7 +113,7 @@ function launchInstalledAppImage(appImagePath) {
   delete env.APPDIR;
   delete env.ARGV0;
 
-  const child = spawn(appImagePath, [], {
+  const child = spawn(appImagePath, APPIMAGE_ARGS, {
     detached: true,
     stdio: 'ignore',
     env
