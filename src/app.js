@@ -52,6 +52,9 @@
     let binMsgBytes = [];
     function concatU8(a, b) { const r = new Uint8Array(a.length + b.length); r.set(a); r.set(b, a.length); return r; }
     function concatChunks(chunks) { let n = 0; for (const c of chunks) n += c.length; const r = new Uint8Array(n); let o = 0; for (const c of chunks) { r.set(c, o); o += c.length; } return r; }
+    // A macrotask yield (not just a microtask) so pending rendering/GC/timers actually
+    // get a turn. Used to break up long synchronous bursts of buffered record parsing.
+    function yieldToEventLoop() { return new Promise(resolve => setTimeout(resolve, 0)); }
 
     const configs = [
         { id: "DROGUE_DELAY", label: "Drogue Delay (milliseconds)" },
@@ -101,7 +104,12 @@
                     }
                 }
             }
-            await port.open({ baudRate: 115200 });
+            // Bump the browser/OS-side receive buffer well past the 255-byte default. A
+            // binary offload streams continuously with no flow control, so a larger
+            // buffer gives the host driver much more slack to absorb a burst while the
+            // JS thread is briefly busy (GC, rendering, etc.) before the firmware's own
+            // USB TX buffer backs up.
+            await port.open({ baudRate: 115200, bufferSize: 16384 });
             document.getElementById('connectBtn').style.display = 'none';
             document.getElementById('disconnectBtn').style.display = 'block';
             setSerialEnabled(true);
@@ -222,8 +230,20 @@
                     buf = concatU8(buf, value);
 
                     let progress = true;
+                    let itemsSinceYield = 0;
                     while (progress) {
                         progress = false;
+
+                        // A single buffered chunk can contain thousands of queued records
+                        // (e.g. right after a tab-switch or GC pause). Draining all of them
+                        // in one synchronous burst is exactly the kind of stall that can let
+                        // a USB packet on the device side go undrained - yield periodically
+                        // so rendering/GC/other timers get a turn and the drain doesn't
+                        // monopolize the event loop.
+                        if (++itemsSinceYield >= 256) {
+                            itemsSinceYield = 0;
+                            await yieldToEventLoop();
+                        }
 
                         if (mode === 'text') {
                             // A binary blob begins at a line boundary with the magic bytes.
