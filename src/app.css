@@ -2,6 +2,13 @@
             --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc;
             --accent: #38bdf8; --success: #22c55e; --danger: #ef4444;
             --border: #334155;
+            /* Standardized type scale + spacing for newer UI (Control Panel,
+               config table, session/context menus, badges). Older hand-styled
+               markup elsewhere still uses inline font-size/gap values - left
+               alone rather than risk visually re-tuning layout that can't be
+               screenshotted/verified here. */
+            --fs-xs: 0.65rem; --fs-sm: 0.75rem; --fs-md: 0.85rem;
+            --gap-sm: 6px; --gap-md: 10px;
         }
         body {
             font-family: 'Inter', sans-serif; background-color: var(--bg-color);
@@ -27,18 +34,55 @@
             white-space: nowrap; flex-shrink: 0;
         }
         .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
-        .tab-content { display: none; flex-direction: column; gap: 10px; flex-grow: 1; }
+        /* min-height:0 overrides a flex item's default content-based floor -
+           without it, a tall child (e.g. a long flight list) grows the WHOLE
+           tab beyond the viewport instead of stopping at its own bounds and
+           letting an inner overflow:auto region (like #flight-list) scroll on
+           its own. #main-content's own overflow-y:auto then quietly "catches"
+           that overflow by scrolling the entire page - technically not
+           broken, but not what a scrollable flight list should look like. */
+        .tab-content { display: none; flex-direction: column; gap: 10px; flex-grow: 1; min-height: 0; }
         .tab-content.active { display: flex; }
 
-        .config-row { display: flex; gap: 10px; margin-bottom: 10px; }
-        .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        .config-item { background: #111827; padding: 10px; border-radius: 6px; border: 1px solid var(--border); }
-        .config-label { font-size: 0.7rem; color: #94a3b8; margin-bottom: 5px; text-transform: uppercase; }
-        .config-input-group { display: flex; gap: 5px; }
-        .config-input-group input {
+        .section-label { font-size: var(--fs-sm); color: #94a3b8; text-transform: uppercase; letter-spacing: 0.02em; }
+
+        /* System Configuration tab: config table as the main area, Control
+           Panel as a fixed-width right sidebar - same layout pattern as the
+           Offload and Live Map tabs (.offload-layout / .live-map-layout). */
+        .config-layout { display: flex; gap: 12px; flex-grow: 1; min-height: 0; }
+        .config-main { flex-grow: 1; display: flex; flex-direction: column; gap: 10px; min-width: 0; overflow-y: auto; }
+
+        /* Control Panel: every device-facing action button in one place
+           (Stream/Logging/Board/Pyro groups), instead of scattered stat-cards. */
+        .control-panel { width: 240px; flex-shrink: 0; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+        .control-groups { display: flex; flex-direction: column; gap: var(--gap-md); }
+        .control-group { display: flex; flex-direction: column; gap: 5px; }
+        /* #pyro-fire-buttons is JS-populated (rebuildPyroFireButtons) with a
+           variable number of buttons - needs the same stacking its static
+           sibling groups get "for free" from .control-group's own flex-column. */
+        #pyro-fire-buttons { display: flex; flex-direction: column; gap: 5px; }
+        .control-group-label { font-size: var(--fs-xs); color: #94a3b8; text-transform: uppercase; margin-bottom: 1px; }
+        .control-group .btn { height: 30px; font-size: var(--fs-sm); padding: 4px 8px; }
+        /* The log-health readout sits right under its own group's buttons (not
+           off in a separate box) - a divider is enough to read as "this is what
+           Health reports", rather than needing card-in-a-card styling. */
+        .control-readout-group { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border); }
+        .control-readout { font-size: var(--fs-xs); color: #cbd5e1; }
+        .control-readout span { color: white; font-weight: 600; }
+
+        /* System Configuration: a real table instead of a grid of visually
+           identical boxes - one row per setting, sortable-by-eye, no wasted
+           whitespace between unrelated settings. */
+        .config-table { width: 100%; border-collapse: collapse; font-size: var(--fs-md); }
+        .config-table th { text-align: left; font-size: var(--fs-xs); color: #94a3b8; text-transform: uppercase; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+        .config-table td { padding: 4px 8px; border-bottom: 1px solid #1e293b; }
+        .config-table-label { color: #cbd5e1; }
+        .config-table-input input {
             background: #0f172a; border: 1px solid var(--border); color: white;
-            padding: 5px; border-radius: 4px; flex-grow: 1; width: 50px; font-size: 0.85rem;
+            padding: 5px 8px; border-radius: 4px; width: 100%; max-width: 220px; font-size: var(--fs-md); box-sizing: border-box;
         }
+        .config-table-actions { display: flex; gap: 5px; white-space: nowrap; }
+        .config-table-actions .btn { width: 50px; height: 26px; padding: 2px; font-size: var(--fs-xs); }
 
         .btn {
             background-color: var(--accent); color: var(--bg-color); border: none;
@@ -55,10 +99,45 @@
            now living in the tab bar instead of a full-width sidebar button. */
         .btn.nav-btn { width: auto; height: auto; padding: 8px 16px; font-size: 0.85rem; flex-shrink: 0; }
 
+        /* All four buttons the same uniform size (a plain vertical stack of
+           .btn, same as every other .btn) - no dropdown to dig through. */
         .sidebar-actions { display: flex; flex-direction: column; gap: 8px; margin-top: auto; }
+        .sidebar-action-label { cursor: pointer; }
+        .filter-check { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: #94a3b8; margin: 4px 0; cursor: pointer; }
 
+        /* Right-click context menu - used on flight-list rows and reused for
+           any future per-item quick actions. */
+        .context-menu {
+            position: fixed; z-index: 500; background: var(--card-bg); border: 1px solid var(--border);
+            border-radius: 6px; padding: 4px; display: flex; flex-direction: column; min-width: 150px;
+        }
+        .context-menu button {
+            background: none; border: none; color: #cbd5e1; text-align: left; cursor: pointer;
+            padding: 7px 10px; border-radius: 4px; font-size: var(--fs-sm);
+        }
+        .context-menu button:hover { background: #334155; }
+        .context-menu-danger { color: #ef4444; }
+
+        .streaming-badge { font-size: var(--fs-xs); font-weight: bold; padding: 3px 10px; border-radius: 4px; }
+        .streaming-badge.streaming-on { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+        .streaming-badge.streaming-off { background: #334155; color: #94a3b8; }
+
+        /* Send + Export Log: identical fixed size regardless of console
+           content. #terminal previously sat in this same flex row with no
+           min-width, so a long unbroken console line could force it past its
+           flex-basis and squeeze the button next to it - moved terminal to
+           its own row entirely and gave both buttons here a shared fixed
+           width so neither can be squeezed by the other. */
+        .cmd-row-btn { width: 110px; flex-shrink: 0; }
+
+        /* z-index 2000, well above Leaflet's internal panes/controls (Leaflet's
+           own .leaflet-top/.leaflet-control default to z-index:1000) - at the
+           old z-index:100 these modals were painted OVER by the live map's
+           controls whenever the Live Map tab was active, e.g. connecting to an
+           unrecognized board there showed the map's chrome on top of the
+           "pick your altimeter" modal instead of the modal itself. */
         #series-modal, #config-modal, #profile-modal {
-            display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%;
+            display: none; position: fixed; z-index: 2000; left: 0; top: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.85); align-items: center; justify-content: center;
         }
         .modal-box {
@@ -72,7 +151,7 @@
 
         /* Offload tab: session-flight list lives here now, scoped to this tab instead of the global sidebar */
         .offload-layout { display: flex; gap: 12px; flex-grow: 1; min-height: 0; }
-        .offload-sidebar { width: 220px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; }
+        .offload-sidebar { width: 220px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; min-height: 0; }
         .offload-sidebar-title { font-size: 0.8rem; font-weight: 600; color: #cbd5e1; text-align: center; padding: 4px 0; }
         .offload-main { flex-grow: 1; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 
@@ -90,13 +169,33 @@
         .qr-overlay #qr-canvas { width: 84px; height: 84px; line-height: 0; }
         .qr-overlay #qr-canvas img, .qr-overlay #qr-canvas table, .qr-overlay #qr-canvas svg { width: 84px !important; height: 84px !important; }
         .qr-label { font-size: 0.55rem; color: #94a3b8; margin-top: 3px; }
-        .live-map-sidebar { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
-        .widget-status { font-size: 0.65rem; color: #94a3b8; text-align: center; min-height: 14px; }
+
+        /* Right-click hint + save-progress status: on the map itself (bottom
+           left, mirroring the QR overlay at bottom right) since that's where
+           the action happens, not in the telemetry sidebar. */
+        .map-hint-overlay {
+            position: absolute; left: 10px; bottom: 10px; z-index: 450;
+            background: rgba(15, 23, 42, 0.9); border: 1px solid var(--border); border-radius: 8px;
+            padding: 5px 8px; font-size: var(--fs-xs); color: #94a3b8; text-align: left;
+        }
+        #map-save-status:empty, .map-hint-text:empty { display: none; }
+        #map-save-status { color: var(--accent); }
+        .map-hint-text { opacity: 0.7; }
+
+        /* 360px, not 300px: two 150px dials + the gap between them (308px)
+           plus the telemetry panel's own side padding no longer fit in 300px
+           once the dials were made bigger - this was overflowing the sidebar
+           (and depending on window size, the viewport) rather than wrapping. */
+        .live-map-sidebar { width: 360px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 0; }
 
         /* One unified panel instead of a stack of separate boxed widgets - each
-           .telemetry-section is just a divider-separated region, not its own card. */
-        .telemetry-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; flex-shrink: 0; }
-        .telemetry-section { padding: 8px 10px; border-top: 1px solid var(--border); }
+           .telemetry-section is just a divider-separated region, not its own card.
+           flex-grow (not flex-shrink:0 like before) so the panel fills the
+           sidebar's full height, and the elevation graph (the one section that
+           benefits from it) can claim all the leftover space - see
+           .telemetry-elevation/.elevation-sparkline below. */
+        .telemetry-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; flex-grow: 1; min-height: 0; }
+        .telemetry-section { padding: 8px 10px; border-top: 1px solid var(--border); flex-shrink: 0; }
         .telemetry-section:first-child { border-top: none; }
 
         .telemetry-dials { display: flex; justify-content: space-evenly; align-items: flex-start; gap: 8px; }
@@ -105,31 +204,27 @@
 
         /* Compass and navball visuals adapted from AerospaceNU/pyqt_groundstation
            (src/Widgets/QWidget_Parts/compass_display_widget.py, navball_display_widget.py) */
-        .compass-dial { width: 118px; height: 118px; border-radius: 50%; border: 2px solid var(--border); position: relative; background: #0f172a; flex-shrink: 0; }
+        .compass-dial { width: 150px; height: 150px; border-radius: 50%; border: 2px solid var(--border); position: relative; background: #0f172a; flex-shrink: 0; }
         .compass-tick { position: absolute; font-size: 0.7rem; font-weight: 700; color: #94a3b8; }
-        .compass-tick-n { top: 4px; left: 50%; transform: translateX(-50%); color: #f8fafc; }
-        .compass-tick-e { right: 7px; top: 50%; transform: translateY(-50%); }
-        .compass-tick-s { bottom: 4px; left: 50%; transform: translateX(-50%); }
-        .compass-tick-w { left: 7px; top: 50%; transform: translateY(-50%); }
+        .compass-tick-n { top: 5px; left: 50%; transform: translateX(-50%); color: #f8fafc; }
+        .compass-tick-e { right: 9px; top: 50%; transform: translateY(-50%); }
+        .compass-tick-s { bottom: 5px; left: 50%; transform: translateX(-50%); }
+        .compass-tick-w { left: 9px; top: 50%; transform: translateY(-50%); }
         .compass-needle {
             position: absolute; left: 50%; top: 50%; width: 0; height: 0;
-            margin-left: -8px; margin-top: -42px; transform-origin: 8px 42px;
-            border-left: 8px solid transparent; border-right: 8px solid transparent; border-bottom: 42px solid #ef4444;
+            margin-left: -8px; margin-top: -53px; transform-origin: 8px 53px;
+            border-left: 8px solid transparent; border-right: 8px solid transparent; border-bottom: 53px solid #ef4444;
             transition: transform 0.2s linear;
         }
 
-        /* Navball texture panned via JS (background-position, for pitch/yaw) and
-           rotated (transform, for roll) - see NAVBALL_PX_PER_DEG in app.js. Sized
-           well past the circular viewport so rotation never reveals empty corners. */
-        .navball { width: 118px; height: 118px; border-radius: 50%; overflow: hidden; position: relative; border: 2px solid var(--border); background: #1a5f7a; flex-shrink: 0; }
-        .navball-texture {
-            position: absolute; left: 50%; top: 50%; width: 300px; height: 300px; margin-left: -150px; margin-top: -150px;
-            background-image: url("{{NAVBALL_DATA_URI}}"); background-repeat: repeat-x; background-position: center center;
-            background-size: auto 110px;
-            transition: transform 0.2s linear;
-        }
-        .navball-reticle { position: absolute; left: 50%; top: 50%; width: 34px; height: 2px; background: #f8fafc; margin-left: -17px; margin-top: -1px; box-shadow: 0 0 2px black; }
-        .navball-reticle::before { content: ''; position: absolute; left: 50%; top: -8px; width: 2px; height: 8px; background: #f8fafc; margin-left: -1px; box-shadow: 0 0 2px black; }
+        /* Navball: a real textured 3D sphere rendered into this canvas by
+           three.js/WebGL - see initNavball3D/updateNavball in
+           src/js/06-live-map.js. The circular clip + border here is just the
+           gauge bezel; all the actual rendering is WebGL, not CSS. */
+        .navball { width: 150px; height: 150px; border-radius: 50%; overflow: hidden; position: relative; border: 2px solid var(--border); background: #1a5f7a; flex-shrink: 0; }
+        .navball canvas { width: 100%; height: 100%; display: block; }
+        .navball-reticle { position: absolute; left: 50%; top: 50%; width: 43px; height: 2px; background: #f8fafc; margin-left: -21.5px; margin-top: -1px; box-shadow: 0 0 2px black; }
+        .navball-reticle::before { content: ''; position: absolute; left: 50%; top: -10px; width: 2px; height: 10px; background: #f8fafc; margin-left: -1px; box-shadow: 0 0 2px black; }
 
         .telemetry-stats { display: flex; gap: 10px; }
         .stat-block { flex: 1; text-align: center; }
@@ -144,7 +239,12 @@
         .pyro-badge.pyro-ready { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
         .pyro-badge.pyro-fired { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
 
-        .elevation-sparkline { height: 210px; }
+        /* The one section that should claim leftover sidebar height instead
+           of just taking its natural size - overrides .telemetry-section's
+           flex-shrink:0 default with flex-grow, and needs its own flex-column
+           + min-height:0 so the plot div inside can, in turn, grow to fill it. */
+        .telemetry-elevation { flex-grow: 1; flex-shrink: 1; display: flex; flex-direction: column; min-height: 80px; }
+        .elevation-sparkline { flex-grow: 1; min-height: 0; }
 
         .map-context-menu { position: absolute; z-index: 500; background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px; }
         .map-context-menu .btn { width: auto; white-space: nowrap; font-size: 0.75rem; padding: 6px 10px; height: auto; }
@@ -171,8 +271,21 @@
 
         .stats-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
         .stat-card { background: var(--card-bg); padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); text-align: center; display: flex; flex-direction: column; justify-content: center; min-height: 38px; }
+        /* Distinct from a plain stat-card: this one holds action buttons, not a
+           readout, so it's tinted with the accent color to read as "does
+           something" at a glance rather than "shows something". */
         .offload-action-card { background: rgba(56, 189, 248, 0.08); border: 1px solid var(--accent); }
         .stat-val { font-size: 0.95rem; font-weight: bold; color: var(--accent); line-height: 1.1; }
+        .stat-unit { font-size: var(--fs-xs); color: #94a3b8; }
+
+        /* Offload tab's stat row: wider "flight summary" card in the middle
+           (holds 3 readouts as one unit, not 3 identical-looking boxes) and a
+           narrower action-buttons card on each side. */
+        .offload-stats-grid { grid-template-columns: 1fr 2fr 1fr; }
+        .flight-summary-card { flex-direction: row; justify-content: space-evenly; align-items: center; }
+        .flight-summary-item { display: flex; flex-direction: column; align-items: center; }
+        .stat-card-buttons { gap: 4px; }
+        .stat-card-buttons .btn { height: auto; flex-grow: 1; font-size: var(--fs-sm); padding: 4px; }
 
         .hover-dashboard {
             background: #111827; border: 1px solid var(--border); border-radius: 6px;

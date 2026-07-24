@@ -4,15 +4,19 @@ Single source of truth for the SillyGoose Configuration Tool — both the **web
 app** (hosted on GitHub Pages) and the **desktop app** (Electron).
 
 The app is a self-contained vanilla-JS single-page tool that talks to SillyGoose
-flight computers over Web Serial. `build.mjs` assembles `src/` (app.js, app.css,
-body.html, bundled Plotly + JSZip, logo) into one standalone `dist/index.html`.
-Both targets use that same file: Electron loads it directly; the GitHub Action
-publishes it to the Pages site.
+flight computers over Web Serial. `build.mjs` assembles `src/` (js/, app.css,
+body.html, bundled Plotly + JSZip + Leaflet, logo) into one standalone
+`dist/index.html`. Both targets use that same file: Electron loads it directly;
+the GitHub Action publishes it to the Pages site.
 
 ## Layout
 
 ```
 src/                  web app source (single source of truth)
+src/js/               app source, split into numbered modules (00-logger.js,
+                      01-telemetry.js, 02-protocol.js, ...) - concatenated by
+                      build.mjs into one classic <script> in load order, same
+                      global scope as if it were still one file
 build.mjs             assembles src/ -> dist/index.html (+ PWA manifest & SW)
 make-icon.mjs         pads assets/icon.png to a square and writes assets/icon.ico
 electron/             desktop wrapper (main process + serial picker modal)

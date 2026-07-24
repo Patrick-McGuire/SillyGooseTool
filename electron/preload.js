@@ -21,3 +21,14 @@ contextBridge.exposeInMainWorld('sgFirmware', {
     return () => ipcRenderer.removeListener('firmware:progress', listener);
   }
 });
+
+// Auto-logs streamed telemetry to disk as it arrives (desktop-only, same as
+// sgFirmware above) - the renderer feature-detects `window.sgStreamLog`.
+contextBridge.exposeInMainWorld('sgStreamLog', {
+  // Starts a new log file for this streaming session; { header, profileId }.
+  start: (meta) => ipcRenderer.invoke('stream-log:start', meta),
+  // Appends an array of already-formatted text rows.
+  append: (lines) => ipcRenderer.invoke('stream-log:append', lines),
+  // Closes the current log file, if any.
+  stop: () => ipcRenderer.invoke('stream-log:stop')
+});

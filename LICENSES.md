@@ -7,6 +7,7 @@
 - pako, used by JSZip, MIT license, https://github.com/nodeca/pako
 - Leaflet v1.9.4, BSD-2-Clause license, https://github.com/Leaflet/Leaflet
 - qrcode-generator v1.4.4, MIT license, https://github.com/kazuhikoarase/qrcode-generator
+- three.js r128, MIT license, https://github.com/mrdoob/three.js (renders the Live Map tab's navball as a real textured 3D sphere via WebGL)
 
 The local logo image in `src/assets/logo.png` is bundled as a data URI by `build.py`.
 

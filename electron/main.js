@@ -440,6 +440,51 @@ ipcMain.handle('firmware:flash', async (event, uf2Path) => {
   return { ok: true, drive };
 });
 
+// ---------------------------------------------------------------------------
+// Stream log auto-save (desktop-only)
+// ---------------------------------------------------------------------------
+// Every row the renderer sees while streaming gets appended here as it
+// arrives, so the raw stream survives a crash or a forgotten "Save Stream
+// Log" click. Written outside the git repo entirely (Electron's per-user
+// `userData` directory, e.g. %APPDATA%/<app name>/stream-logs on Windows) -
+// not a path under the project checkout, so there's nothing here that needs
+// a .gitignore entry.
+let streamLogFile = null; // { fd, path } | null
+
+function streamLogDir() {
+  const dir = path.join(app.getPath('userData'), 'stream-logs');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function closeStreamLogFile() {
+  if (!streamLogFile) return;
+  try { fs.closeSync(streamLogFile.fd); } catch (e) { /* already closed */ }
+  streamLogFile = null;
+}
+
+ipcMain.handle('stream-log:start', (_event, meta) => {
+  closeStreamLogFile();
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const profileId = (meta && meta.profileId) || 'unknown';
+  const filePath = path.join(streamLogDir(), `stream-${stamp}-${profileId}.txt`);
+  const fd = fs.openSync(filePath, 'a');
+  if (meta && meta.header) fs.writeSync(fd, meta.header + '\n');
+  streamLogFile = { fd, path: filePath };
+  return { path: filePath };
+});
+
+ipcMain.handle('stream-log:append', (_event, lines) => {
+  if (!streamLogFile || !Array.isArray(lines) || !lines.length) return;
+  fs.writeSync(streamLogFile.fd, lines.join('\n') + '\n');
+});
+
+ipcMain.handle('stream-log:stop', () => {
+  closeStreamLogFile();
+});
+
+app.on('before-quit', closeStreamLogFile);
+
 app.whenReady().then(async () => {
   const relaunching = await ensureLinuxAppImageIntegration(path.join(__dirname, '..', 'assets'));
   if (!relaunching) createWindow();
