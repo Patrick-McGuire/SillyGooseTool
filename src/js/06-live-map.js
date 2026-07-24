@@ -1,42 +1,26 @@
 // ===================== Live Map tab =====================
-// Big offline-capable map + a unified telemetry panel, fed by the same live
-// telemetry stream as the Live Stream tab (conn.liveDataBuffer, populated by
-// handleLiveLine() from `--streamLog -b`). Only wired up for a directly
-// connected flight computer for now; a ground station's forwarded GPS/radio
-// serial lines are a natural second data source for this tab later, since
-// they're already tagged/parseable independently of a flight computer's log
-// format (see SeriousGooseGround.cpp in the firmware repo) - and since the
-// widgets below read from the Telemetry store rather than a raw row/profile,
-// a second source just needs to publish the same keys.
+// Offline-capable map + a unified telemetry panel, fed by the same
+// conn.liveDataBuffer as the Live Stream tab (via handleLiveLine). Only a
+// direct flight-computer connection feeds it today; a ground station's
+// forwarded GPS/radio lines are a natural second source later, since widgets
+// below read the Telemetry store by key rather than a raw row/profile - a
+// second source just needs to publish the same keys.
 //
-// TILE SOURCES: Esri's ArcGIS World_Street_Map / World_Imagery, both free to
-// embed without an API key at this kind of low-volume/hobby usage. Switched to
-// these from the raw OpenStreetMap tile server (tile.openstreetmap.org) after
-// hitting 403s there - OSM's tile usage policy actively blocks exactly this
-// kind of bulk/scripted access, which offline pre-caching is. Esri's terms are
-// more permissive for embedded display use, but still check them before
-// relying on this at an actual launch - heavy usage may want a real Esri
-// developer key or a self-hosted tile source (e.g. a local MBTiles instance)
-// instead.
-// `{s}` + `subdomains` is Leaflet's built-in domain-sharding mechanism - round-
-// robins tile requests across hostnames to get around the browser's ~6-
-// connections-per-origin cap on HTTP/1.1 (confirmed via curl: this endpoint
-// serves plain HTTP/1.1, not HTTP/2, so that cap is real and was the actual
-// reason bumping this app's own SAVE_CONCURRENCY had so little effect - most
-// of those "concurrent" fetches were just queued behind 6 real connections).
-// `services.arcgisonline.com` was confirmed (by directly requesting real
-// tiles from it) to serve identical content to `server.arcgisonline.com` on
-// both layers below - it's not documented by Esri as a sharding domain the
-// way e.g. OSM's a/b/c.tile.* subdomains are, so if it ever stops mirroring
-// server.arcgisonline.com, tiles routed to it will simply fail (the retry
-// logic in saveCurrentMapViewOffline will still retry once, then skip them).
-// Attribution kept as short as reasonably defensible: Esri's services report a
-// much longer `copyrightText` (the full per-contributor list, e.g. "Esri,
-// Vantor, Earthstar Geographics, and the GIS User Community" for imagery -
-// confirmed by querying World_Imagery/World_Street_Map's `?f=json` metadata
-// directly), but "© Esri" is the widely-used minimal form for a compact map
-// attribution. Leaflet's own "Leaflet" prefix is dropped entirely below (its
-// BSD-2-Clause license doesn't require on-map credit, unlike Esri's terms).
+// TILE SOURCES: Esri ArcGIS World_Street_Map/World_Imagery - free, no API key,
+// for this hobby volume. Switched from the raw OpenStreetMap tile server
+// after hitting 403s there (OSM's usage policy blocks exactly this kind of
+// bulk/scripted access, which offline pre-caching is); re-check Esri's terms
+// before an actual launch - heavy use may want a developer key or a self-
+// hosted source instead. `{s}`/`subdomains` is Leaflet's domain-sharding,
+// working around the ~6-connections-per-origin cap on this endpoint's plain
+// HTTP/1.1 (confirmed via curl) - the real ceiling on SAVE_CONCURRENCY below,
+// not the browser or this code. `services.arcgisonline.com` mirrors
+// `server.arcgisonline.com` on both layers (confirmed directly) but isn't a
+// documented Esri sharding domain, so if that ever changes, tiles routed
+// there just fail (saveCurrentMapViewOffline retries once, then skips them).
+// Attribution is shortened to "© Esri" from Esri's full per-contributor
+// `copyrightText`; Leaflet's own credit is dropped entirely (its BSD-2-Clause
+// license doesn't require on-map credit, unlike Esri's terms).
 const TILE_LAYERS = {
     street: {
         label: 'Street',
@@ -187,28 +171,22 @@ function showSaveViewMenu(e) {
     dismissOnOutsideClick(menu);
 }
 
-// Saves a range of zoom levels around the current view - not just the exact
-// zoom level on screen - so zooming in further while offline still shows
-// cached tiles instead of blanks. This used to always go up to the layer's
-// absolute max zoom (19) regardless of how zoomed-in the current view was,
-// which is the actual dominant cost: tile count roughly quadruples per zoom
-// level, so the top 1-2 levels alone can be ~90%+ of the total - if you
-// saved from, say, zoom 10 (a whole city), it silently tried to fetch
-// street-level zoom-19 tiles across that ENTIRE area. Capping how far IN it
-// goes relative to wherever you currently are keeps the worst case bounded
-// regardless of starting zoom, while still reaching the true max zoom for
-// small areas once you've zoomed in close first (the "zoom to the launch
-// site, then save" workflow this was always meant for).
+// Saves a zoom range around the current view (not just the exact level on
+// screen) so zooming in further offline still shows cached tiles instead of
+// blanks. Capped relative to the CURRENT zoom rather than the layer's
+// absolute max (19): tile count roughly quadruples per level, so saving from
+// a zoomed-out view (e.g. a whole city) used to silently try to fetch the
+// entire area at street-level zoom-19. This bounds the worst case regardless
+// of starting zoom, while still reaching the true max for the "zoom to the
+// launch site, then save" case this is for.
 const SAVE_ZOOM_OUT = 1;
 const SAVE_ZOOM_IN = 3;
-// Fetching tiles one at a time (fully sequential) is what made this take
-// "forever" - each tile pays a full network round trip before the next one
-// starts. A bounded worker pool cuts wall-clock time by roughly this factor
-// without firing every request at once. Esri's tile CDN (unlike a small
-// self-hosted server) comfortably handles well beyond the 40 this started at,
-// so this is pushed higher - the actual bottleneck at this concurrency is
-// network bandwidth × tile count (which the confirm() dialog below already
-// surfaces), not the browser or this code.
+// Sequential fetching (one round trip at a time) is what made this take
+// "forever"; a bounded worker pool cuts wall-clock time roughly by this
+// factor without firing every request at once. Esri's CDN comfortably
+// handles well beyond the 40 this started at, so it's pushed higher - the
+// real bottleneck at this concurrency is bandwidth × tile count (surfaced by
+// the confirm() dialog below), not the browser or this code.
 const SAVE_CONCURRENCY = 64;
 // One retry for a tile that fails (transient network blip / a momentary CDN
 // hiccup) rather than permanently skipping it - cheap since it only fires on
@@ -264,13 +242,11 @@ async function saveCurrentMapViewOffline() {
         return;
     }
 
-    // One up-front bulk read of every already-cached key (a single IndexedDB
-    // transaction) instead of one `get()` transaction per tile. With 64
-    // concurrent workers each doing their own existence check, that was 64
-    // simultaneous IndexedDB transactions competing with each other for
-    // largely the same answer - this does the "is it already cached" check
-    // as a plain in-memory Set lookup instead, so IndexedDB is only touched
-    // (once per worker) for the tiles that actually need to be written.
+    // One bulk read of every cached key up front (a single transaction)
+    // instead of a `get()` per tile - with 64 concurrent workers each
+    // checking individually, that was 64 IndexedDB transactions competing for
+    // the same answer. Existence is now a plain in-memory Set lookup;
+    // IndexedDB is only touched for tiles that actually need writing.
     let existingKeys;
     try {
         existingKeys = new Set(await tileDbGetAllKeys(db));
@@ -325,14 +301,11 @@ function quatToEuler(w, x, y, z) {
     return { roll: roll * 180 / Math.PI, pitch: pitch * 180 / Math.PI, yaw: yaw * 180 / Math.PI };
 }
 
-// Navball: a real textured 3D sphere rendered with three.js/WebGL, not a
-// flat panned image. A 2D CSS pan (the previous approach) can only ever
-// approximate a rotating sphere - no perspective foreshortening near the
-// poles, roll doesn't actually tilt anything in 3D, and getting the "pan
-// distance per degree" exactly right is guesswork. This replicates
-// AerospaceNU/pyqt_groundstation's actual technique (a textured OpenGL
-// sphere, src/Widgets/QWidget_Parts/navball_display_widget.py) instead of
-// approximating it.
+// Navball: a real textured 3D sphere rendered with three.js/WebGL, not a flat
+// panned image - a 2D CSS pan can only approximate a rotating sphere (no
+// perspective foreshortening near the poles, roll doesn't tilt anything in
+// 3D). Replicates AerospaceNU/pyqt_groundstation's actual technique (a
+// textured OpenGL sphere, navball_display_widget.py) instead of approximating it.
 let navballScene = null, navballCamera = null, navballRenderer = null, navballSphere = null;
 
 function initNavball3D() {
@@ -375,16 +348,12 @@ function initNavball3D() {
     }
 }
 
-// Sign/axis conventions here were tuned empirically against real screenshots
-// (Puppeteer), the same way the reference project's own author tuned theirs -
-// its navball_display_widget.py source literally opens with "I literally have
-// no idea what any of the opengl stuff does", and its own fixed pre-rotation
-// constants aren't derived from anything documented either. What's verified:
-// at rest, sky is up and ground is down; positive pitch (nose up) drops the
-// horizon and shows more sky; positive roll tilts the horizon; yaw pans
-// heading. That's the actual bar for "correct" here, not matching their
-// numbers verbatim - three.js's sphere uses a different pole axis than
-// GLU's, so their constants don't carry over directly regardless.
+// Sign/axis conventions were tuned empirically against real screenshots, not
+// derived - the reference project's own constants aren't documented either,
+// and three.js's sphere uses a different pole axis than GLU's anyway, so they
+// wouldn't carry over verbatim. What's verified as "correct": at rest sky is
+// up/ground is down; positive pitch (nose up) drops the horizon; positive
+// roll tilts it; yaw pans heading.
 function updateNavball(roll, pitch, yaw) {
     initNavball3D();
     if (!navballSphere) return;
@@ -410,9 +379,8 @@ function setPyroBadge(id, continuity, fired) {
     el.className = 'pyro-badge ' + (fired ? 'pyro-fired' : (continuity ? 'pyro-ready' : 'pyro-open'));
 }
 
-// Rebuilds the Live Map panel's pyro badges from the active profile's `pyros`
-// list - one per channel the board actually has. Called at startup and
-// whenever the profile changes (see Connection.setActiveProfile).
+// Rebuilds the Live Map's pyro badges, one per channel in the active
+// profile's `pyros` list (see ALTIMETER_PROFILES[...].pyros).
 function rebuildPyroWidgets(conn) {
     const container = document.getElementById('telemetry-pyros');
     if (!container) return;
@@ -461,9 +429,7 @@ function publishTelemetryFromRow(conn, row) {
         Telemetry.set('attitude', quatToEuler(quat.w, quat.x, quat.y, quat.z));
     }
 
-    // One entry per pyro channel the active profile actually has (see
-    // ALTIMETER_PROFILES[...].pyros) - a board with more or fewer pyros just
-    // produces a longer or shorter array here, nothing else changes.
+    // One entry per pyro channel in the active profile (see ALTIMETER_PROFILES[...].pyros).
     Telemetry.set('pyros', conn.profile.pyros.map(p => ({
         id: p.id, label: p.label,
         continuity: row[p.contCol] === "1", fired: row[p.firedCol] === "1"

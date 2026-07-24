@@ -1,9 +1,8 @@
 // --- Terminal, busy indicator, tab switching, top-level wiring --------------
 
-// Removes a floating context/popup menu the moment the user clicks anywhere
-// outside it. Shared by every ad-hoc right-click menu in the app (flight-list
-// context menu, live map's "save view" menu) instead of each reimplementing
-// the same listen-once-and-remove pattern.
+// Removes a floating popup menu on the next outside click. Shared by every
+// ad-hoc menu (flight-list context menu, live map's "save view" menu) instead
+// of each reimplementing the same listen-once-and-remove pattern.
 function dismissOnOutsideClick(menu) {
     setTimeout(() => document.addEventListener('click', function closeMenu() {
         menu.remove();
@@ -33,14 +32,10 @@ function setBusy(val) {
     if (!val && ConnectionManager.getActive().port) setSerialEnabled(true);
 }
 
-// While the window is hidden/occluded (e.g. alt-tabbed away), the Live Graph
-// and Live Map's Plotly redraws are already skipped entirely (see the
-// `!document.hidden` / tab-active checks in handleLiveLine/updateLiveMapIfActive)
-// rather than queuing up - so there's no backlog to "catch up" on. But since
-// data keeps arriving the whole time, whatever was last drawn is now stale;
-// redraw immediately on return instead of waiting for the next row (which,
-// throttled to 10Hz, could be up to 100ms away - a small delay is fine, but
-// "not at all until new data happens to arrive" isn't).
+// Redraws are already skipped entirely while hidden (see the `!document.hidden`
+// / tab-active checks in handleLiveLine/updateLiveMapIfActive), so there's no
+// backlog to catch up on - but whatever was last drawn is now stale. Force one
+// redraw on return instead of waiting up to 100ms for the next throttled row.
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
     const conn = ConnectionManager.getActive();
@@ -110,10 +105,8 @@ if (exportLogBtn) exportLogBtn.onclick = () => {
 
 window.onload = initUI;
 
-// Everything above is plain top-level `let`/`const`/`class` (classic-script
-// scope), which - unlike `var`/`function` declarations - does NOT attach to
-// `window`. Bridging the handful of things worth reaching from outside the
-// script (browser devtools console for interactive troubleshooting; this
-// app's own test harness) through one intentional namespace, rather than
-// leaving no way in at all.
+// Top-level `let`/`const`/`class` (classic-script scope) don't attach to
+// `window` the way `var`/`function` do. Bridge the handful of things worth
+// reaching from outside (devtools console, this app's test harness) through
+// one intentional namespace instead of leaving no way in at all.
 window.SG = { ConnectionManager, Telemetry, DebugLog, getFlightData: () => flightData };

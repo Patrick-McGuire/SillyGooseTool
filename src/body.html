@@ -157,9 +157,7 @@
                         </div>
                     </div>
 
-                    <!-- Populated from the active profile's `pyros` list (see
-                         rebuildPyroWidgets) - one badge per pyro channel this board
-                         actually has, no hardcoded drogue/main/aux. -->
+                    <!-- One badge per pyro channel (see rebuildPyroWidgets / ALTIMETER_PROFILES[...].pyros). -->
                     <div id="telemetry-pyros" class="telemetry-section telemetry-pyros"></div>
 
                     <div class="telemetry-section telemetry-elevation">
@@ -199,9 +197,7 @@
                     </div>
                     <div class="control-group">
                         <div class="control-group-label">Pyro</div>
-                        <!-- Populated from the active profile's `pyros` list (see
-                             rebuildPyroFireButtons) - exactly as many Fire buttons as
-                             this board has pyro channels, no hardcoded drogue/main/aux. -->
+                        <!-- One Fire button per pyro channel (see rebuildPyroFireButtons / ALTIMETER_PROFILES[...].pyros). -->
                         <div id="pyro-fire-buttons"></div>
                     </div>
                     <!-- Logging controls + the log health readout they control, together -

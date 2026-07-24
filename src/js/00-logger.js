@@ -1,10 +1,9 @@
 // --- Debug logger -----------------------------------------------------------
-// A structured, never-trimmed ring buffer of everything the app does
-// (connect/disconnect, every command sent, every notable received line,
-// warnings/errors). Independent of the on-screen terminal (#terminal), which
-// is a human-facing live view capped at 80 lines - this buffer is much larger
-// and exists so a user hitting a bug can export it and hand it back for
-// troubleshooting instead of trying to describe/reproduce what happened.
+// A structured ring buffer (cap MAX_ENTRIES) of everything the app does -
+// connects/disconnects, every command sent, every notable received line,
+// warnings/errors. Independent of the on-screen terminal (#terminal, capped
+// at 80 lines for a human-readable live view) - this is for a user hitting a
+// bug to export and hand back for troubleshooting.
 const DebugLog = (() => {
     const MAX_ENTRIES = 5000;
     const entries = [];

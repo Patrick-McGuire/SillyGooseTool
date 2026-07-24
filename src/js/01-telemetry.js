@@ -1,21 +1,14 @@
 // --- Telemetry store ---------------------------------------------------------
-// A flat, named key -> latest-value dictionary, decoupled from which
-// connection/profile/column-index produced the value - the same idea as
-// AerospaceNU/pyqt_groundstation's global telemetry dictionary. Widgets that
-// only ever need the *current* value (battery voltage, GPS fix, attitude,
-// pyro continuity) subscribe here instead of reaching into a raw decoded row
-// with a profile-specific column index.
+// Flat key -> latest-value dictionary, decoupled from which connection/
+// profile/column produced it - widgets (battery, GPS, attitude, pyro
+// continuity) subscribe by name instead of reading a raw row by column index.
+// "Latest value only", not a time series - full-history plots (Live Stream /
+// Offload) read the connection's liveDataBuffer / a flight's raw rows instead.
 //
-// Plots that need full history (the Live Stream / Offload graphs) still read
-// from the connection's liveDataBuffer / a flight's raw rows directly - this
-// store is deliberately "latest value only", not a time series.
-//
-// Not yet namespaced per-device - only one connection is ever active today
-// (see ConnectionManager). When multi-device support lands, keys should
-// become `${connectionId}.${field}` and each device's widgets should
-// subscribe against its own prefix; every call site below already goes
-// through set()/subscribe() rather than touching a bare object, so that's a
-// mechanical follow-up, not a rewrite.
+// Not namespaced per-device yet (only one connection is ever active - see
+// ConnectionManager). When multi-device support lands, keys become
+// `${connectionId}.${field}`; every call site already goes through
+// set()/subscribe() rather than a bare object, so that's mechanical, not a rewrite.
 const Telemetry = (() => {
     const values = new Map();
     const subs = new Map(); // key -> Set(fn)

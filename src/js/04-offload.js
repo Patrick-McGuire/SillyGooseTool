@@ -137,9 +137,7 @@ function plotFlight(flight) {
         annotations.push({ x: time, y: 1, yref: 'paper', text: txt, showarrow: false, textangle: -90, xanchor: 'right', font: { color: col, size: 9 } });
     };
 
-    // One fired-event marker per pyro channel this flight's board actually has
-    // (see ALTIMETER_PROFILES[...].pyros) - a board with more than drogue+main
-    // just gets more markers here, nothing hardcoded to those two names.
+    // One marker per pyro channel the flight's board has (see ALTIMETER_PROFILES[...].pyros).
     const pyros = profileForFlight(flight).pyros;
     const pyroEventColors = ['purple', 'blue', 'teal', 'brown', 'magenta'];
     for (let i = 1; i < states.length; i++) {
@@ -168,6 +166,11 @@ function plotFlight(flight) {
     document.getElementById('stat-state').innerText = FLIGHT_STATE_NAMES[states[states.length - 1]] || '-';
 }
 
+// Matches the static placeholder body.html ships for #hover-dashboard /
+// #live-hover-dashboard, so clearing back to "nothing selected" looks
+// identical to the initial pre-data state.
+const HOVER_PLACEHOLDER = `<div style="color: #64748b; font-style: italic;">Hover over the chart to see data...</div>`;
+
 function setupHoverEvents(plotId, dashId, isLiveTab) {
     const gd = document.getElementById(plotId);
     const dash = document.getElementById(dashId);
@@ -177,7 +180,7 @@ function setupHoverEvents(plotId, dashId, isLiveTab) {
             isLiveHovering = false;
             updateLiveDashboardWithMostRecent();
         } else {
-            dash.innerHTML = `<div style="color: #64748b; font-style: italic;">Hover over the chart to see data...</div>`;
+            dash.innerHTML = HOVER_PLACEHOLDER;
         }
     };
 
@@ -205,7 +208,7 @@ function deleteLog(i) {
         selectedIdx = -1;
         Plotly.purge('plot-container');
         document.getElementById('saveFileBtn').disabled = true;
-        document.getElementById('hover-dashboard').innerHTML = `<div style="color: #64748b; font-style: italic;">Hover over the chart to see data...</div>`;
+        document.getElementById('hover-dashboard').innerHTML = HOVER_PLACEHOLDER;
     } else if (selectedIdx > i) {
         selectedIdx--;
     }
@@ -217,7 +220,7 @@ function clearAllSession() {
         flightData = []; selectedIdx = -1;
         Plotly.purge('plot-container');
         document.getElementById('saveFileBtn').disabled = true;
-        document.getElementById('hover-dashboard').innerHTML = `<div style="color: #64748b; font-style: italic;">Hover over the chart to see data...</div>`;
+        document.getElementById('hover-dashboard').innerHTML = HOVER_PLACEHOLDER;
         refreshList();
     }
 }
@@ -250,7 +253,6 @@ function closeSeriesModal() {
 }
 
 // Rebuilds the graph series-picker checkboxes from the active profile's header.
-// Called at startup and whenever the profile changes.
 function rebuildSeriesPicker(conn) {
     const picker = document.getElementById('series-picker');
     if (!picker) return;

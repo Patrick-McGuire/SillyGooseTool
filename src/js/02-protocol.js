@@ -5,17 +5,15 @@
 // `profile` / `header` / `configs` rather than hardcoding a specific board's
 // layout, so adding a new board should only mean adding a new profile here.
 //
-// SeriousGoose's log struct used to be SillyGoose's struct with GPS fields
-// simply appended at the end. That's no longer true as of the aux pyro
-// channel (src/builds/SeriousGoose.cpp's `auxContinuity`/`auxFired`, added
-// 2026-07-24) - SeriousGoose now inserts 2 fields BEFORE the
-// tilt/angularVel/quaternion block that SillyGoose also has, shifting all of
-// SillyGoose's own post-mainFired columns for SeriousGoose only. `COMMON_COLS`
-// below only covers the genuinely identical prefix (through mainFired) -
-// each profile defines its own columns past that point. Per-flight code
-// should still look values up through a flight's own profile's `cols` (see
-// `profileForFlight()`) rather than assuming the two profiles agree beyond
-// what COMMON_COLS actually guarantees.
+// SeriousGoose's log struct is NOT just SillyGoose's struct with GPS fields
+// appended: its aux pyro channel (src/builds/SeriousGoose.cpp's
+// `auxContinuity`/`auxFired`) inserts 2 fields BEFORE the tilt/angularVel/
+// quaternion block SillyGoose also has, shifting every SillyGoose post-
+// mainFired column for SeriousGoose only. `COMMON_COLS` below only covers the
+// genuinely identical prefix (through mainFired) - each profile defines its
+// own columns past that. Per-flight code should look values up through the
+// flight's own profile's `cols` (see `profileForFlight()`), not assume the
+// two profiles agree beyond what COMMON_COLS guarantees.
 const SILLY_GOOSE_HEADER = [
     "timestampMs", "pressurePa", "tempK", "accelX", "accelY", "accelZ",
     "gyroX", "gyroY", "gyroZ", "imuTemp", "battV", "altitudeM",
@@ -69,13 +67,12 @@ const RADIO_CONFIGS = [
 // the Live Map widget, the config viewer's FLIGHT_STATE formatter).
 const FLIGHT_STATE_NAMES = { 0: "PRE_FLIGHT", 1: "ASCENT", 2: "DESCENT", 3: "POST_FLIGHT", 4: "UNKNOWN_FLIGHT_STATE" };
 
-// Decodes the 20 fields every board so far has in common (timestampMs through
+// Decodes the 20 fields every board has in common (timestampMs through
 // mainFired) from a DataView positioned at the start of a LOG_DATA record
-// (byte 0 is the record id). Returns the decoded fields plus the byte offset
-// just past them, so each profile's decodeDataRecord can keep decoding
-// whatever comes next in ITS OWN layout (see decodeOrientationFields below for
-// the other genuinely-shared block, and ALTIMETER_PROFILES for what's
-// profile-specific).
+// (byte 0 is the record id). Returns the fields plus the byte offset just
+// past them, so each profile's decodeDataRecord can keep decoding whatever
+// comes next in its own layout (see decodeOrientationFields for the other
+// shared block, and ALTIMETER_PROFILES for what's profile-specific).
 function decodeCommonFields(dv) {
     let o = 1; // skip the id byte
     const f = () => { const v = dv.getFloat32(o, true); o += 4; return v; };

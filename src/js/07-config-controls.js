@@ -9,10 +9,8 @@ function setSerialEnabled(en) {
     document.querySelectorAll('.ctrl-btn, .cfg-get, .cfg-set, #sendBtn, #getAllBtn, #eraseBtn').forEach(b => b.disabled = !en);
 }
 
-// Rebuilds the Control Panel's Fire buttons from the active profile's `pyros`
-// list - a board's Fire buttons are exactly as many as it has pyro channels,
-// nothing hardcoded to "drogue"/"main"/"aux". Called at startup and whenever
-// the profile changes (see Connection.setActiveProfile).
+// Rebuilds the Control Panel's Fire buttons, one per channel in the active
+// profile's `pyros` list (see ALTIMETER_PROFILES[...].pyros).
 function rebuildPyroFireButtons(conn) {
     const container = document.getElementById('pyro-fire-buttons');
     if (!container) return;
@@ -29,15 +27,13 @@ Telemetry.subscribe('logEntries', v => { const el = document.getElementById('log
 Telemetry.subscribe('logRemaining', v => { const el = document.getElementById('log-rem'); if (el) el.textContent = v; });
 Telemetry.subscribe('logStatus', v => { const el = document.getElementById('log-status'); if (el) el.textContent = v; });
 
-// Live-updates an already-rendered config table row whenever the board
-// reports that config's value (a "MSG: X is set to: Y" line, published as
-// Telemetry key `cfg.X` by Connection.processLine). Tracked so a profile
-// switch can clear out the previous table's subscriptions instead of piling
-// up stale ones.
+// Live-updates an already-rendered config row when the board reports that
+// config's value ("MSG: X is set to: Y", published as Telemetry key `cfg.X`
+// by Connection.processLine). Tracked so a profile switch can clear the
+// previous table's subscriptions instead of piling up stale ones.
 let cfgTelemetryUnsubs = [];
 
-// Rebuilds the System Configuration tab's table from the active profile's
-// config list. Called at startup and whenever the profile changes.
+// Rebuilds the System Configuration tab's table from the active profile's config list.
 function rebuildConfigFields(conn) {
     const cfgContainer = document.getElementById('config-fields');
     if (!cfgContainer) return;

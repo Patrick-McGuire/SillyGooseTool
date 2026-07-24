@@ -1,12 +1,10 @@
 // --- Live Stream tab ----------------------------------------------------
 let isLiveHovering = false;
 
-// Stream on/off is now controlled from the Control Panel (System
-// Configuration tab, see 07-config-controls.js) since it's a device action
-// like every other one there - this tab just reflects the resulting state,
-// plus how long ago the last row actually arrived (see lastMessageAt below) -
-// a stalled radio link still shows "Streaming" from the board's point of view,
-// but a growing age here is the tell.
+// Stream on/off is controlled from the Control Panel (see 07-config-controls.js)
+// like any other device action - this tab just reflects the resulting state,
+// plus how long ago the last row arrived (lastMessageAt): a stalled link still
+// shows "Streaming" from the board's point of view, but a growing age is the tell.
 let streamingOn = false;
 let lastMessageAt = null;
 
@@ -36,11 +34,10 @@ Telemetry.subscribe('streaming', on => {
 // --- Auto-log streamed data, same text format an offload produces --------
 // Desktop: written incrementally to disk (see electron/main.js's
 // stream-log:* IPC handlers + window.sgStreamLog in preload.js) so the raw
-// stream survives even if the app crashes or nobody remembers to save it.
-// Browser build (no filesystem access): conn.streamLogLines still accumulates
-// in memory for the whole streaming session, and "Save Stream Log" (below)
-// turns it into a flight the Offload tab can plot/export like any other -
-// same buildFlightText()/import path, so it's compatible with both.
+// stream survives a crash or a forgotten save. Browser build (no filesystem
+// access): conn.streamLogLines accumulates in memory instead, and "Save
+// Stream Log" below turns it into a flight via the same buildFlightText()/
+// import path as any other - compatible with both builds.
 const STREAM_LOG_FLUSH_INTERVAL_MS = 2000;
 let streamLogFlushTimer = null;
 let streamLogPending = [];
@@ -73,12 +70,11 @@ if (saveStreamLogBtn) saveStreamLogBtn.onclick = () => {
 };
 
 // Redraws a live Plotly chart at most this often, independent of how fast
-// data actually arrives. Plotly.react is expensive per call - re-running it
-// at whatever rate telemetry rows arrive (this can be 50-100Hz) is what made
-// a large history buffer "completely break" the Live Graph tab. A human
-// can't perceive updates faster than this anyway. `fn.forceNow(...)` bypasses
-// the gate for one call (used to redraw immediately when the tab/window
-// becomes visible again, rather than waiting for the next row).
+// data arrives. Plotly.react is expensive per call - re-running it at
+// telemetry's actual rate (50-100Hz) is what made a large history buffer
+// "completely break" the Live Graph tab, and a human can't perceive updates
+// faster than this anyway. `fn.forceNow(...)` bypasses the gate for one call
+// (used to redraw immediately when the tab/window becomes visible again).
 const LIVE_REDRAW_MIN_INTERVAL_MS = 100; // ~10Hz
 function throttleByTime(fn, minIntervalMs) {
     let last = 0;

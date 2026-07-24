@@ -1,14 +1,13 @@
 // --- Connection -------------------------------------------------------------
 // Everything about one serial link to a board: the Web Serial port/reader,
-// the binary/text parser state machine, which altimeter profile is active,
-// and the current recording/streaming buffers. This used to be a pile of
-// top-level `let` globals (port, reader, activeProfile, recording, ...) -
-// pulling them into a class means a second, independent board connection
-// (a second USB device, or a ground-station radio link forwarding a second
-// altimeter's telemetry) is just `new Connection()` + adding it to
-// ConnectionManager, not a rewrite of this file. Multi-device UI is
-// deliberately NOT built yet (nothing iterates more than the one active
-// connection today) - this is purely so that work has somewhere to land.
+// the binary/text parser state machine, the active altimeter profile, and the
+// current recording/streaming buffers. This used to be a pile of top-level
+// `let` globals (port, reader, activeProfile, recording, ...) - as a class, a
+// second independent connection (a second USB device, or a ground-station
+// radio link) is just `new Connection()` + registering it with
+// ConnectionManager, not a rewrite. Multi-device UI isn't built yet (nothing
+// iterates more than the one active connection today); this shape just gives
+// that work somewhere to land.
 class Connection {
     constructor(id) {
         this.id = id;
@@ -41,10 +40,11 @@ class Connection {
     }
 
     // Switches the active altimeter profile, refreshing everything derived from
-    // it (log column list, series picker, config tab fields, binary CRC
-    // fingerprint). Safe to call any time, including mid-session - flightData
-    // already captured under a different profile keeps working via
-    // profileForFlight().
+    // it: log column list, binary CRC fingerprint, and every profile-driven UI
+    // piece (series picker, config table, pyro widgets/fire buttons - each
+    // rebuild* function documents only what it builds, not this lifecycle).
+    // Safe to call any time, including mid-session - flightData already
+    // captured under a different profile keeps working via profileForFlight().
     setActiveProfile(id) {
         const profile = ALTIMETER_PROFILES[id];
         if (!profile || profile === this.profile) return;
@@ -88,9 +88,7 @@ class Connection {
             // USB TX buffer backs up.
             await this.port.open({ baudRate: 115200, bufferSize: 16384 });
             DebugLog.info('connection', 'port opened');
-            document.getElementById('connectBtn').style.display = 'none';
-            document.getElementById('disconnectBtn').style.display = 'block';
-            setSerialEnabled(true);
+            setConnectedUI(true);
             this.keepReading = true;
             this.readLoop();
             await detectAltimeterOnConnect(this);
@@ -110,9 +108,7 @@ class Connection {
 
     forceUIDisconnect() {
         this.port = null; setBusy(false); this.recording = false; this.streaming = false;
-        document.getElementById('connectBtn').style.display = 'block';
-        document.getElementById('disconnectBtn').style.display = 'none';
-        setSerialEnabled(false);
+        setConnectedUI(false);
     }
 
     async sendCmd(msg) {
@@ -129,20 +125,15 @@ class Connection {
     // Handle one logical text line (from the text stream, or reconstructed from a
     // binary message record). Mirrors the original per-line offload logic.
     //
-    // IMPORTANT (perf): while `recording` (an offload) or `streaming` (a live
-    // stream), the vast majority of lines are decoded data rows, arriving as
-    // fast as the radio/serial link can carry them - easily 50-100Hz while
-    // streaming, thousands of rows total for an offload. Echoing every one of
-    // them to the terminal builds more timestamped HTML onto a growing string
-    // faster than the terminal's 100ms flush can drain it, which is what made
-    // offload visibly lag, and is also part of why alt-tabbing away and back
-    // mid-stream used to hang: `setInterval`-based timers (including that
-    // flush) get throttled hard while the window is occluded, so termBuffer
-    // could grow large before the next flush actually runs. Data rows are
-    // already captured into currentFlightLines/streamLogLines below;
-    // there's nothing useful about also echoing them to a scrollback nobody
-    // is reading in real time. A periodic progress count (recordOffloadProgress)
-    // and the Live Graph tab's "last message age" cover the same need instead.
+    // IMPORTANT (perf): data rows arrive at up to 50-100Hz while recording or
+    // streaming. Echoing each one to the terminal grows termBuffer faster than
+    // its 100ms flush can drain it - worse still while occluded, since
+    // `setInterval` timers (including that flush) get throttled hard in the
+    // background (same root cause as yieldToEventLoop's comment below). That's
+    // what made offload visibly lag and alt-tab-back hang. Rows are already
+    // captured into currentFlightLines/streamLogLines; recordOffloadProgress()
+    // and the Live Graph tab's "last message age" cover the human-visible need
+    // instead of a scrollback nobody reads in real time.
     processLine(line) {
         const isDataRow = /^\d/.test(line);
         if (!((this.recording || this.streaming) && isDataRow)) logTerm(line);
@@ -308,6 +299,17 @@ class Connection {
     }
 }
 
+// Toggles the Connect/Disconnect tab-bar buttons and every device-facing
+// control together. The three places a connection actually opens or closes -
+// Connection.connect, Connection.forceUIDisconnect, and firmware.js's
+// fwAdoptPort (post-flash auto-reconnect) - all flip the same three things,
+// so they share this instead of repeating it.
+function setConnectedUI(connected) {
+    document.getElementById('connectBtn').style.display = connected ? 'none' : 'block';
+    document.getElementById('disconnectBtn').style.display = connected ? 'block' : 'none';
+    setSerialEnabled(connected);
+}
+
 // Returns the profile a saved flight was captured under (stamped by
 // saveFlight()/the file-upload handler), falling back to the currently active
 // profile for older in-memory flights that predate the stamp.
@@ -315,19 +317,17 @@ function profileForFlight(f) {
     return (f && ALTIMETER_PROFILES[f.profileId]) || ConnectionManager.getActive().profile;
 }
 
-// A macrotask yield (not just a microtask) so pending rendering/GC/timers actually
-// get a turn. Used to break up long synchronous bursts of buffered record parsing.
+// A macrotask yield (not just a microtask) so pending rendering/GC/timers get a
+// turn - breaks up long synchronous bursts of buffered record parsing.
 //
-// IMPORTANT: this used to be `setTimeout(resolve, 0)`. Chromium (and therefore
-// Electron) throttles timers heavily once a window is occluded/backgrounded -
-// alt-tabbing away is enough to trigger this even without minimizing. While
-// occluded, each of these "yields" could take up to ~1 second instead of
-// ~0ms, so the read loop fell further and further behind real-time for as
-// long as the window stayed unfocused; on refocus it had to burn through a
-// large backlog all at once, which showed up as a multi-second hang right
-// when you tabbed back in. A MessageChannel round-trip schedules a real
-// macrotask the same way, but isn't subject to that same background timer
-// clamp, so the read loop keeps pace with incoming data regardless of focus.
+// IMPORTANT: this used to be `setTimeout(resolve, 0)`. Chromium (and Electron)
+// throttles timers heavily once a window is occluded/backgrounded - alt-
+// tabbing away is enough. Each yield could then take ~1s instead of ~0ms, so
+// the read loop fell further behind the longer the window stayed unfocused,
+// then had to burn through the backlog all at once on refocus - a multi-
+// second hang right when you tabbed back in. A MessageChannel round-trip
+// schedules a real macrotask without that background clamp, so the read loop
+// keeps pace regardless of focus.
 function yieldToEventLoop() {
     if (typeof MessageChannel === 'undefined') return new Promise(resolve => setTimeout(resolve, 0));
     // A fresh channel per call (rather than one shared/reused channel) so
@@ -355,11 +355,11 @@ function concatU8(a, b) { const r = new Uint8Array(a.length + b.length); r.set(a
 function concatChunks(chunks) { let n = 0; for (const c of chunks) n += c.length; const r = new Uint8Array(n); let o = 0; for (const c of chunks) { r.set(c, o); o += c.length; } return r; }
 
 // --- ConnectionManager -------------------------------------------------------
-// Holds every live Connection. Exactly one is ever created/active today - the
-// array + active-id indirection exists so a second connection (a second USB
-// port, or a future ground-station radio link) is additive later: push another
-// Connection, point UI that should show it at its id, done. Nothing today
-// iterates `connections` expecting more than one.
+// Holds every live Connection (see its own multi-device note above). Exactly
+// one is ever created/active today; the array + active-id indirection just
+// means a second connection is additive later - push another Connection,
+// point its UI at the new id, done. Nothing today iterates `connections`
+// expecting more than one.
 const ConnectionManager = (() => {
     const connections = [];
     let activeId = null;
