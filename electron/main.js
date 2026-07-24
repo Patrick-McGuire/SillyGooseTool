@@ -9,19 +9,34 @@ const { APP_ID, APP_NAME, PRODUCT_NAME, ensureLinuxAppImageIntegration } = requi
 const FIRMWARE_REPO = 'AerospaceNU/nuli-avionics-flight-software';
 
 app.setName(APP_NAME);
-if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
+// Give an unpackaged dev run (electron .) a distinct AppUserModelID from the
+// installed release. Windows uses this ID to decide "same app" for taskbar
+// grouping/pinning, so sharing it made a local dev launch collapse into the
+// already-pinned installed copy instead of getting its own taskbar identity.
+if (process.platform === 'win32') app.setAppUserModelId(app.isPackaged ? APP_ID : `${APP_ID}.dev`);
 if (process.platform === 'linux') {
   app.commandLine.appendSwitch('class', PRODUCT_NAME);
   app.commandLine.appendSwitch('no-sandbox');
 }
 
-// USB product descriptor ("SillyGooseV2") of the most recently selected port.
-// Used by the renderer to auto-detect the V1/V2 firmware variant. This is the
-// compile-time USB iProduct string, NOT the user-writable BOARD_NAME config.
+// USB product descriptor ("SillyGooseV2", "SeriousGooseV1", "SeriousGooseGroundV1") of
+// the most recently selected port. Used by the renderer to auto-detect the board
+// family + variant. This is the compile-time USB iProduct string, NOT the
+// user-writable BOARD_NAME config.
 let lastBoardDisplayName = '';
 
-// Adafruit USB vendor ID. SillyGoose boards enumerate under Adafruit's VID and
-// set their USB product string to "SillyGoose" (platformio.ini board.name).
+// Board families this tool knows how to flash. `prefix` matches both the USB
+// product string and release asset names (platformio.ini's board.build.usb_product
+// is set to "<prefix><variant>", e.g. "SeriousGooseV1"), so adding a new board
+// family only means adding an entry here.
+const BOARD_FAMILIES = [
+  { id: 'SillyGoose', prefix: 'SillyGoose', variants: [1, 2] },
+  { id: 'SeriousGoose', prefix: 'SeriousGoose', variants: [1] },
+  { id: 'SeriousGooseGround', prefix: 'SeriousGooseGround', variants: [1] }
+];
+
+// Adafruit USB vendor ID. All our boards enumerate under Adafruit's VID and set
+// their USB product string to "<family><variant>" (platformio.ini board.name).
 const ADAFRUIT_VENDOR_ID = 0x239a; // 9114
 const UF2_MAGIC = 0x0a324655;
 
@@ -33,15 +48,15 @@ function vendorMatches(vendorId, target) {
   return parseInt(s, 10) === target || parseInt(s, 16) === target;
 }
 
-// Decide which connected serial ports are SillyGoose boards. Prefer the precise
-// match (Adafruit VID + "SillyGoose" in the displayName, e.g. "SillyGooseV2");
-// if no name matches (e.g. the OS didn't surface a product string), fall back to
-// any Adafruit device so the user can still connect.
-function filterSillyGoosePorts(portList) {
+// Decide which connected serial ports are one of our known boards. Prefer the
+// precise match (Adafruit VID + a known family prefix in the displayName, e.g.
+// "SeriousGooseV1"); if no name matches (e.g. the OS didn't surface a product
+// string), fall back to any Adafruit device so the user can still connect.
+function filterKnownBoardPorts(portList) {
   const named = portList.filter(
     (p) =>
       vendorMatches(p.vendorId, ADAFRUIT_VENDOR_ID) &&
-      (p.displayName || '').toLowerCase().includes('sillygoose')
+      BOARD_FAMILIES.some((f) => (p.displayName || '').toLowerCase().includes(f.prefix.toLowerCase()))
   );
   if (named.length > 0) return named;
   return portList.filter((p) => vendorMatches(p.vendorId, ADAFRUIT_VENDOR_ID));
@@ -123,7 +138,7 @@ function createWindow() {
     console.log('select-serial-port portList:', JSON.stringify(portList, null, 2));
 
     const allPorts = portList || [];
-    const candidates = filterSillyGoosePorts(allPorts);
+    const candidates = filterKnownBoardPorts(allPorts);
 
     // Remember the chosen port's USB product string so the firmware tab can
     // auto-detect the board variant (V1/V2).
@@ -241,11 +256,13 @@ async function validateUf2Path(uf2Path) {
   return path.resolve(uf2Path);
 }
 
-// Download URL for the V1/V2 (non-Sim) asset of a release. Asset names look like
-// SillyGooseV2.uf2 / SillyGooseV2_not_flight_tested.uf2 / SillyGooseV2_v1.00.uf2,
-// with SillyGooseV2Sim.uf2 variants we must exclude.
-function pickAsset(assets, n) {
-  const re = new RegExp(`^SillyGooseV${n}(?!Sim)`);
+// Download URL for the "<prefix>V<n>" (non-Sim) asset of a release. Asset names
+// look like SeriousGooseV1.uf2 / SeriousGooseV1_not_flight_tested.uf2 /
+// SeriousGooseV1_v1.00.uf2, with e.g. SeriousGooseV1Sim.uf2 variants we must
+// exclude (and, since prefixes aren't substrings of each other, no risk of
+// SillyGoose/SeriousGoose/SeriousGooseGround assets cross-matching).
+function pickAsset(assets, prefix, n) {
+  const re = new RegExp(`^${prefix}V${n}(?!Sim)`);
   const a = (assets || []).find((x) => re.test(x.name));
   return a ? a.browser_download_url : null;
 }
@@ -261,9 +278,19 @@ function normalizeReleases(releases) {
     else if (tag === 'not-flight-tested-latest') channel = notFlightTested;
     else continue;
 
-    const v1 = pickAsset(r.assets, 1);
-    const v2 = pickAsset(r.assets, 2);
-    if (!v1 && !v2) continue;
+    // assets.<familyId> = { V1: url, V2: url, ... } for whichever variants that
+    // family's release actually published assets for.
+    const assets = {};
+    let anyAsset = false;
+    for (const family of BOARD_FAMILIES) {
+      const familyAssets = {};
+      for (const n of family.variants) {
+        const url = pickAsset(r.assets, family.prefix, n);
+        if (url) { familyAssets['V' + n] = url; anyAsset = true; }
+      }
+      assets[family.id] = familyAssets;
+    }
+    if (!anyAsset) continue;
 
     const isLatest = tag === 'latest' || tag === 'not-flight-tested-latest';
     channel.push({
@@ -272,7 +299,7 @@ function normalizeReleases(releases) {
       isLatest,
       prerelease: !!r.prerelease,
       publishedAt: r.published_at || '',
-      assets: { V1: v1, V2: v2 }
+      assets
     });
   }
   // Pin the rolling "latest" to the top, then newest-first by publish date.

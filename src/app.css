@@ -1,41 +1,17 @@
         :root {
             --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc;
             --accent: #38bdf8; --success: #22c55e; --danger: #ef4444;
-            --border: #334155; --sidebar-w: 240px;
+            --border: #334155;
         }
         body {
             font-family: 'Inter', sans-serif; background-color: var(--bg-color);
             color: var(--text-main); margin: 0; display: flex; height: 100vh; overflow: hidden;
         }
-        #sidebar {
-            width: var(--sidebar-w); flex-shrink: 0; background-color: var(--card-bg);
-            border-right: 1px solid var(--border); display: flex; flex-direction: column;
-            padding: 12px 14px; gap: 10px; box-sizing: border-box;
-        }
         #main-content { flex-grow: 1; display: flex; flex-direction: column; padding: 12px 16px; gap: 6px; overflow-y: auto; }
 
-        header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+        header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; gap: 10px; }
         .header-right { display: flex; align-items: center; gap: 15px; }
-
-        /* Updated Logo Layout - Stacked & Full Width */
-        .logo-container {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            margin-bottom: 5px;
-        }
-        .logo-img {
-            width: 50%;
-            align-self: center;
-            height: auto;
-            border-radius: 8px;
-            object-fit: contain;
-        }
-        .logo-text-group {
-            display: flex;
-            flex-direction: column;
-            width: 100%;
-        }
+        .logo-img-small { height: 34px; width: auto; border-radius: 6px; object-fit: contain; }
 
         .loader {
             width: 20px; height: 20px; border: 3px solid var(--border);
@@ -48,6 +24,7 @@
         .tab-btn {
             padding: 10px 20px; border: none; background: none; color: #94a3b8;
             cursor: pointer; font-weight: 600; border-bottom: 2px solid transparent;
+            white-space: nowrap; flex-shrink: 0;
         }
         .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
         .tab-content { display: none; flex-direction: column; gap: 10px; flex-grow: 1; }
@@ -73,10 +50,14 @@
         .btn-secondary { background-color: var(--border); color: white; }
         .btn-danger { background-color: var(--danger); color: white; }
         .btn-warn { background-color: #f59e0b; color: black; }
+        /* .btn.nav-btn (not just .nav-btn) so this reliably beats .btn's width/height
+           regardless of stylesheet order - used for the Connect/Disconnect buttons
+           now living in the tab bar instead of a full-width sidebar button. */
+        .btn.nav-btn { width: auto; height: auto; padding: 8px 16px; font-size: 0.85rem; flex-shrink: 0; }
 
         .sidebar-actions { display: flex; flex-direction: column; gap: 8px; margin-top: auto; }
 
-        #series-modal, #config-modal {
+        #series-modal, #config-modal, #profile-modal {
             display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.85); align-items: center; justify-content: center;
         }
@@ -88,6 +69,86 @@
         .series-opt { font-size: 0.85rem; display: flex; align-items: center; gap: 10px; cursor: pointer; color: #cbd5e1; }
 
         #flight-list { flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: #0f172a; min-height: 150px; }
+
+        /* Offload tab: session-flight list lives here now, scoped to this tab instead of the global sidebar */
+        .offload-layout { display: flex; gap: 12px; flex-grow: 1; min-height: 0; }
+        .offload-sidebar { width: 220px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; }
+        .offload-sidebar-title { font-size: 0.8rem; font-weight: 600; color: #cbd5e1; text-align: center; padding: 4px 0; }
+        .offload-main { flex-grow: 1; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+        /* Live Map tab */
+        .live-map-layout { display: flex; gap: 10px; flex-grow: 1; min-height: 0; }
+        .live-map-container { flex-grow: 1; border-radius: 12px; border: 1px solid var(--border); background: var(--card-bg); position: relative; min-width: 0; }
+        #live-map { width: 100%; height: 100%; border-radius: 12px; }
+        .leaflet-container { border-radius: 12px; background: #0b1220; font-family: 'Inter', sans-serif; }
+
+        .qr-overlay {
+            position: absolute; right: 10px; bottom: 10px; z-index: 450;
+            background: rgba(15, 23, 42, 0.9); border: 1px solid var(--border); border-radius: 8px;
+            padding: 6px; text-align: center;
+        }
+        .qr-overlay #qr-canvas { width: 84px; height: 84px; line-height: 0; }
+        .qr-overlay #qr-canvas img, .qr-overlay #qr-canvas table, .qr-overlay #qr-canvas svg { width: 84px !important; height: 84px !important; }
+        .qr-label { font-size: 0.55rem; color: #94a3b8; margin-top: 3px; }
+        .live-map-sidebar { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
+        .widget-status { font-size: 0.65rem; color: #94a3b8; text-align: center; min-height: 14px; }
+
+        /* One unified panel instead of a stack of separate boxed widgets - each
+           .telemetry-section is just a divider-separated region, not its own card. */
+        .telemetry-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; flex-shrink: 0; }
+        .telemetry-section { padding: 8px 10px; border-top: 1px solid var(--border); }
+        .telemetry-section:first-child { border-top: none; }
+
+        .telemetry-dials { display: flex; justify-content: space-evenly; align-items: flex-start; gap: 8px; }
+        .dial-block { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+        .dial-label { font-size: 0.65rem; color: #94a3b8; }
+
+        /* Compass and navball visuals adapted from AerospaceNU/pyqt_groundstation
+           (src/Widgets/QWidget_Parts/compass_display_widget.py, navball_display_widget.py) */
+        .compass-dial { width: 118px; height: 118px; border-radius: 50%; border: 2px solid var(--border); position: relative; background: #0f172a; flex-shrink: 0; }
+        .compass-tick { position: absolute; font-size: 0.7rem; font-weight: 700; color: #94a3b8; }
+        .compass-tick-n { top: 4px; left: 50%; transform: translateX(-50%); color: #f8fafc; }
+        .compass-tick-e { right: 7px; top: 50%; transform: translateY(-50%); }
+        .compass-tick-s { bottom: 4px; left: 50%; transform: translateX(-50%); }
+        .compass-tick-w { left: 7px; top: 50%; transform: translateY(-50%); }
+        .compass-needle {
+            position: absolute; left: 50%; top: 50%; width: 0; height: 0;
+            margin-left: -8px; margin-top: -42px; transform-origin: 8px 42px;
+            border-left: 8px solid transparent; border-right: 8px solid transparent; border-bottom: 42px solid #ef4444;
+            transition: transform 0.2s linear;
+        }
+
+        /* Navball texture panned via JS (background-position, for pitch/yaw) and
+           rotated (transform, for roll) - see NAVBALL_PX_PER_DEG in app.js. Sized
+           well past the circular viewport so rotation never reveals empty corners. */
+        .navball { width: 118px; height: 118px; border-radius: 50%; overflow: hidden; position: relative; border: 2px solid var(--border); background: #1a5f7a; flex-shrink: 0; }
+        .navball-texture {
+            position: absolute; left: 50%; top: 50%; width: 300px; height: 300px; margin-left: -150px; margin-top: -150px;
+            background-image: url("{{NAVBALL_DATA_URI}}"); background-repeat: repeat-x; background-position: center center;
+            background-size: auto 110px;
+            transition: transform 0.2s linear;
+        }
+        .navball-reticle { position: absolute; left: 50%; top: 50%; width: 34px; height: 2px; background: #f8fafc; margin-left: -17px; margin-top: -1px; box-shadow: 0 0 2px black; }
+        .navball-reticle::before { content: ''; position: absolute; left: 50%; top: -8px; width: 2px; height: 8px; background: #f8fafc; margin-left: -1px; box-shadow: 0 0 2px black; }
+
+        .telemetry-stats { display: flex; gap: 10px; }
+        .stat-block { flex: 1; text-align: center; }
+        .stat-label { font-size: 0.6rem; color: #94a3b8; text-transform: uppercase; margin-bottom: 2px; }
+        .stat-value { font-size: 1.4rem; font-weight: bold; color: var(--accent); }
+        .stat-value-sm { font-size: 0.85rem; }
+
+        .telemetry-pyros { display: flex; gap: 20px; justify-content: center; }
+        .pyro-item { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: #94a3b8; }
+        .pyro-badge { font-weight: bold; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; }
+        .pyro-badge.pyro-open { background: #334155; color: #94a3b8; }
+        .pyro-badge.pyro-ready { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+        .pyro-badge.pyro-fired { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+
+        .elevation-sparkline { height: 210px; }
+
+        .map-context-menu { position: absolute; z-index: 500; background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px; }
+        .map-context-menu .btn { width: auto; white-space: nowrap; font-size: 0.75rem; padding: 6px 10px; height: auto; }
+        .rocket-marker { color: var(--accent); font-size: 20px; text-align: center; text-shadow: 0 0 3px black; line-height: 20px; }
 
         /* Firmware tab */
         .fw-panel { max-width: 560px; display: flex; flex-direction: column; gap: 14px; }
@@ -110,6 +171,7 @@
 
         .stats-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
         .stat-card { background: var(--card-bg); padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); text-align: center; display: flex; flex-direction: column; justify-content: center; min-height: 38px; }
+        .offload-action-card { background: rgba(56, 189, 248, 0.08); border: 1px solid var(--accent); }
         .stat-val { font-size: 0.95rem; font-weight: bold; color: var(--accent); line-height: 1.1; }
 
         .hover-dashboard {

@@ -32,7 +32,10 @@ function needBytes(path) {
 
 const plotlyJs = needText(resolve(LIB, 'plotly-2.27.0.min.js'));
 const jszipJs = needText(resolve(LIB, 'jszip-3.10.1.min.js'));
-const appCss = needText(resolve(SRC, 'app.css'));
+const leafletJs = needText(resolve(LIB, 'leaflet-1.9.4.min.js'));
+const leafletCss = needText(resolve(LIB, 'leaflet-1.9.4.css'));
+const qrcodeJs = needText(resolve(LIB, 'qrcode-generator-1.4.4.js'));
+let appCss = needText(resolve(SRC, 'app.css'));
 let bodyHtml = needText(resolve(SRC, 'body.html'));
 const appJs = needText(resolve(SRC, 'app.js'));
 
@@ -43,11 +46,26 @@ if (!bodyHtml.includes('{{LOGO_DATA_URI}}')) {
 }
 bodyHtml = bodyHtml.replaceAll('{{LOGO_DATA_URI}}', logoDataUri);
 
+// Navball texture (from AerospaceNU/pyqt_groundstation's src/Assets/navball.png) -
+// used as a CSS background-image for the Live Map tab's attitude widget.
+const navballBase64 = needBytes(resolve(ASSETS, 'navball.png')).toString('base64');
+const navballDataUri = `data:image/png;base64,${navballBase64}`;
+if (!appCss.includes('{{NAVBALL_DATA_URI}}')) {
+  throw new Error('Missing navball placeholder in src/app.css');
+}
+appCss = appCss.replaceAll('{{NAVBALL_DATA_URI}}', navballDataUri);
+
 const thirdPartyNotice = `Plotly.js v2.27.0 - https://github.com/plotly/plotly.js
 Copyright (c) 2012-2023 Plotly, Inc. Licensed MIT.
 
 JSZip v3.10.1 - https://github.com/Stuk/jszip
 Copyright (c) 2009-2016 Stuart Knightley. Licensed MIT or GPLv3.
+
+Leaflet v1.9.4 - https://github.com/Leaflet/Leaflet
+Copyright (c) 2010-2023 Volodymyr Agafonkin, 2010-2011 CloudMade. Licensed BSD-2-Clause.
+
+qrcode-generator v1.4.4 - https://github.com/kazuhikoarase/qrcode-generator
+Copyright (c) 2009 Kazuhiko Arase. Licensed MIT.
 
 Full license notes: see LICENSES.md alongside this file.`;
 
@@ -78,6 +96,9 @@ const html = `<!DOCTYPE html>
 <title>SillyGoose Configuration Tool</title>
 ${pwaHead}
 <style>
+${leafletCss}
+</style>
+<style>
 ${appCss}
 </style>
 </head>
@@ -90,6 +111,14 @@ ${plotlyJs}
 <script>
 /*! JSZip v3.10.1 - MIT or GPLv3 - https://github.com/Stuk/jszip */
 ${jszipJs}
+</script>
+<script>
+/*! Leaflet v1.9.4 - BSD-2-Clause - https://github.com/Leaflet/Leaflet */
+${leafletJs}
+</script>
+<script>
+/*! qrcode-generator v1.4.4 - MIT - https://github.com/kazuhikoarase/qrcode-generator */
+${qrcodeJs}
 </script>
 <script>
 ${appJs}

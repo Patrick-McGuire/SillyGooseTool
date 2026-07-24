@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Select SillyGoose</title>
+<title>Select Board</title>
 <style>
   :root {
     --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --muted: #94a3b8;
@@ -40,8 +40,8 @@
 </head>
 <body>
   <div>
-    <h1 id="title">Select your SillyGoose</h1>
-    <p class="sub" id="subtitle">Multiple SillyGoose boards are connected. Choose one to connect.</p>
+    <h1 id="title">Select your board</h1>
+    <p class="sub" id="subtitle">Multiple known boards are connected. Choose one to connect.</p>
   </div>
   <div id="list"></div>
   <div class="actions">
@@ -56,7 +56,7 @@
     if (payload.fallback) {
       document.getElementById('title').textContent = 'Select a serial device';
       document.getElementById('subtitle').textContent =
-        'No SillyGoose board was recognized. Choose a serial port to connect anyway.';
+        'No known board was recognized. Choose a serial port to connect anyway.';
     }
     list.innerHTML = '';
     devices.forEach((d, i) => {

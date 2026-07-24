@@ -10,6 +10,7 @@
     "build:web": "node build.mjs",
     "icon": "node make-icon.mjs",
     "start": "npm run build:web && electron .",
+    "build:local": "npm run build:web && electron-builder --win dir --config.productName=\"SillyGoose Tool (Local)\" --config.extraMetadata.localAppId=com.sillygoose.tool.local --config.extraMetadata.localAppName=\"SillyGoose Tool (Local)\" --config.extraMetadata.localProductName=SillyGooseToolLocal",
     "dist": "npm run build:web && electron-builder --win nsis",
     "dist:linux": "npm run build:web && electron-builder --linux AppImage",
     "release": "npm run build:web && electron-builder --publish always"

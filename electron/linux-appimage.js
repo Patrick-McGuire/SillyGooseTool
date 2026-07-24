@@ -4,9 +4,17 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const APP_ID = 'com.sillygoose.tool';
-const APP_NAME = 'SillyGoose Tool';
-const PRODUCT_NAME = 'SillyGooseTool';
+// A locally-built standalone .exe (npm run build:local) bakes distinct
+// `local*` fields into its packaged package.json via electron-builder's
+// --config.extraMetadata, so it gets its own Windows AppUserModelID/name
+// instead of sharing one with the official installed release - otherwise
+// Windows treats them as "the same app" for taskbar grouping/pinning
+// regardless of the exe's filename. Absent for a normal build, so the
+// official release's identity is completely unchanged.
+const pkg = require('../package.json');
+const APP_ID = pkg.localAppId || 'com.sillygoose.tool';
+const APP_NAME = pkg.localAppName || 'SillyGoose Tool';
+const PRODUCT_NAME = pkg.localProductName || 'SillyGooseTool';
 const APPIMAGE_NAME = `${PRODUCT_NAME}.AppImage`;
 const APPIMAGE_ARGS = ['--no-sandbox'];
 
