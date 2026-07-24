@@ -16,8 +16,6 @@ Telemetry.subscribe('offloadProgress', n => {
     });
 });
 
-const stateNames = { 0: "PRE_FLIGHT", 1: "ASCENT", 2: "DESCENT", 3: "POST_FLIGHT" };
-
 function saveFlight(conn, lines, configLine = "", binChunks = null, namePrefix = "Flight") {
     const flightNum = flightData.length + 1;
     const flight = {
@@ -79,13 +77,9 @@ function showFlightContextMenu(e, i) {
     menu.querySelector('[data-act="config"]').onclick = () => { menu.remove(); selectFlight(i); openConfigModal(); };
     menu.querySelector('[data-act="delete"]').onclick = () => { menu.remove(); deleteLog(i); };
     document.body.appendChild(menu);
-    setTimeout(() => document.addEventListener('click', function closeMenu() {
-        menu.remove();
-        document.removeEventListener('click', closeMenu);
-    }), 0);
+    dismissOnOutsideClick(menu);
 }
 
-const FLIGHT_STATE_NAMES = { 0: "PRE_FLIGHT", 1: "ASCENT", 2: "DESCENT", 3: "POST_FLIGHT", 4: "UNKNOWN_FLIGHT_STATE" };
 const BOARD_ORIENTATION_NAMES = { 0: "ERROR_AXIS_DIRECTION", 1: "POS_X", 2: "NEG_X", 3: "POS_Y", 4: "NEG_Y", 5: "POS_Z", 6: "NEG_Z" };
 const CONFIG_VALUE_FORMATTERS = {
     FLIGHT_STATE: v => `${FLIGHT_STATE_NAMES[parseInt(v)] || '?'} (${v})`,
@@ -149,7 +143,7 @@ function plotFlight(flight) {
     const pyros = profileForFlight(flight).pyros;
     const pyroEventColors = ['purple', 'blue', 'teal', 'brown', 'magenta'];
     for (let i = 1; i < states.length; i++) {
-        if (states[i] !== states[i - 1]) addEv(t[i], `${stateNames[states[i - 1]]} → ${stateNames[states[i]]}`, 'green');
+        if (states[i] !== states[i - 1]) addEv(t[i], `${FLIGHT_STATE_NAMES[states[i - 1]]} → ${FLIGHT_STATE_NAMES[states[i]]}`, 'green');
         pyros.forEach((p, idx) => {
             if (rows[i][p.firedCol] == "1" && rows[i - 1][p.firedCol] == "0") {
                 addEv(t[i], `${p.label.toUpperCase()} FIRED`, pyroEventColors[idx % pyroEventColors.length]);
@@ -171,7 +165,7 @@ function plotFlight(flight) {
 
     document.getElementById('stat-alt').innerText = Math.max(...rows.map(r => parseFloat(r[cols.altitudeM]))).toFixed(1);
     document.getElementById('stat-vel').innerText = Math.max(...rows.map(r => parseFloat(r[cols.velocityMS]))).toFixed(1);
-    document.getElementById('stat-state').innerText = stateNames[states[states.length - 1]] || '-';
+    document.getElementById('stat-state').innerText = FLIGHT_STATE_NAMES[states[states.length - 1]] || '-';
 }
 
 function setupHoverEvents(plotId, dashId, isLiveTab) {

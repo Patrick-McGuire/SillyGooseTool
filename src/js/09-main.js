@@ -1,4 +1,16 @@
 // --- Terminal, busy indicator, tab switching, top-level wiring --------------
+
+// Removes a floating context/popup menu the moment the user clicks anywhere
+// outside it. Shared by every ad-hoc right-click menu in the app (flight-list
+// context menu, live map's "save view" menu) instead of each reimplementing
+// the same listen-once-and-remove pattern.
+function dismissOnOutsideClick(menu) {
+    setTimeout(() => document.addEventListener('click', function closeMenu() {
+        menu.remove();
+        document.removeEventListener('click', closeMenu);
+    }), 0);
+}
+
 let termBuffer = "";
 let cmdHistory = [];
 let historyIdx = -1;
@@ -27,7 +39,7 @@ function setBusy(val) {
 // rather than queuing up - so there's no backlog to "catch up" on. But since
 // data keeps arriving the whole time, whatever was last drawn is now stale;
 // redraw immediately on return instead of waiting for the next row (which,
-// throttled to 5Hz, could be up to 200ms away - a small delay is fine, but
+// throttled to 10Hz, could be up to 100ms away - a small delay is fine, but
 // "not at all until new data happens to arrive" isn't).
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;

@@ -184,10 +184,7 @@ function showSaveViewMenu(e) {
     menu.innerHTML = `<button class="btn btn-secondary">Save this view for offline use (${layerLabel})</button>`;
     menu.querySelector('button').onclick = () => { menu.remove(); saveCurrentMapViewOffline(); };
     document.getElementById('live-map').appendChild(menu);
-    setTimeout(() => document.addEventListener('click', function closeMenu() {
-        menu.remove();
-        document.removeEventListener('click', closeMenu);
-    }), 0);
+    dismissOnOutsideClick(menu);
 }
 
 // Saves a range of zoom levels around the current view - not just the exact
@@ -529,7 +526,7 @@ function updateElevationSparkline(conn) {
     }, { responsive: true, displaylogo: false, staticPlot: true });
 }
 
-// Same 5Hz cap as the Live Graph tab's plot (see throttleByTime/
+// Same 10Hz cap as the Live Graph tab's plot (see throttleByTime/
 // LIVE_REDRAW_MIN_INTERVAL_MS in 05-live-stream.js) - the elevation sparkline
 // is a Plotly.react call too, no need to pay that cost on every incoming row.
 const throttledElevationSparkline = throttleByTime(updateElevationSparkline, LIVE_REDRAW_MIN_INTERVAL_MS);

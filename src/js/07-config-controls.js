@@ -17,7 +17,7 @@ function rebuildPyroFireButtons(conn) {
     const container = document.getElementById('pyro-fire-buttons');
     if (!container) return;
     container.innerHTML = conn.profile.pyros.map(p =>
-        `<button class="btn btn-warn ctrl-btn" data-cmd="${p.fireCmd}" disabled>Fire ${p.label}</button>`
+        `<button class="btn btn-warn ctrl-btn" data-cmd="${p.fireCmd}" data-confirm="Fire ${p.label} pyro?" disabled>Fire ${p.label}</button>`
     ).join('');
     setSerialEnabled(!!conn.port); // newly-created buttons start disabled - sync them to the real state
 }
@@ -102,6 +102,8 @@ document.addEventListener('click', e => {
         conn.sendCmd(`--${id} -set ${val}`);
     }
     if (e.target.classList.contains('ctrl-btn')) {
+        const confirmMsg = e.target.dataset.confirm;
+        if (confirmMsg && !confirm(confirmMsg)) return;
         conn.sendCmd(e.target.dataset.cmd);
     }
 });

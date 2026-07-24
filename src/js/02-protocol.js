@@ -64,6 +64,11 @@ const RADIO_CONFIGS = [
     { id: "RADIO_TRANSMIT_INTERVAL", label: "Radio TX Interval (milliseconds)" }
 ];
 
+// Firmware's FlightState enum (see Avionics.h) - the canonical source for every
+// place that turns a raw flightState int into a label (Offload's graph/summary,
+// the Live Map widget, the config viewer's FLIGHT_STATE formatter).
+const FLIGHT_STATE_NAMES = { 0: "PRE_FLIGHT", 1: "ASCENT", 2: "DESCENT", 3: "POST_FLIGHT", 4: "UNKNOWN_FLIGHT_STATE" };
+
 // Decodes the 20 fields every board so far has in common (timestampMs through
 // mainFired) from a DataView positioned at the start of a LOG_DATA record
 // (byte 0 is the record id). Returns the decoded fields plus the byte offset
