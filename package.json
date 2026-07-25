@@ -1,6 +1,6 @@
 {
   "name": "sillygoose-tool",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "SillyGoose Configuration and Flight Tool",
   "main": "electron/main.js",
   "author": "Patrick McGuire",
