@@ -101,7 +101,12 @@ class Connection {
     async disconnect() {
         this.keepReading = false;
         if (this.reader) { await this.reader.cancel().catch(() => {}); this.reader = null; }
-        if (this.port) { await this.port.close(); this.port = null; }
+        // Best-effort, same as the reader.cancel() above: a port that's already
+        // gone (device unplugged, crashed mid-offload) rejects close() - without
+        // catching that, this throw would skip forceUIDisconnect() entirely,
+        // leaving the UI stuck showing "connected" to a dead port with no way
+        // to recover short of reloading the app.
+        if (this.port) { await this.port.close().catch(() => {}); this.port = null; }
         DebugLog.info('connection', 'disconnected');
         this.forceUIDisconnect();
     }
@@ -109,6 +114,11 @@ class Connection {
     forceUIDisconnect() {
         this.port = null; setBusy(false); this.recording = false; this.streaming = false;
         setConnectedUI(false);
+        // 'offloadProgress' is only otherwise cleared by a clean "Ending Offload"
+        // line (see processLine below) - a disconnect mid-offload (failed/hung
+        // device, dropped USB, manual disconnect) would otherwise leave the
+        // Offload button's label stuck on its last "N rows…" count forever.
+        Telemetry.set('offloadProgress', null);
     }
 
     async sendCmd(msg) {
@@ -292,7 +302,14 @@ class Connection {
                     }
                 }
             } catch (e) {
+                // A genuinely dead port (device unplugged, crashed mid-offload)
+                // lands here. Without forceUIDisconnect(), the read loop just
+                // stops silently: the port stays set, the UI keeps showing
+                // "connected", and any in-progress offload's progress/label
+                // stays stuck forever with no way to recover except reloading
+                // the app - this makes the failure visible and recoverable.
                 DebugLog.error('connection', 'read loop error: ' + e.message);
+                this.forceUIDisconnect();
                 break;
             } finally { if (this.reader) { this.reader.releaseLock(); this.reader = null; } }
         }

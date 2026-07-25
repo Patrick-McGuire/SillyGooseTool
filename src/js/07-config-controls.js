@@ -49,9 +49,11 @@ function rebuildConfigFields(conn) {
         return `<tr>
             <td class="config-table-label">${cfg.label}</td>
             <td class="config-table-input">${inputHtml}</td>
-            <td class="config-table-actions">
-                <button class="btn btn-secondary cfg-get" data-id="${cfg.id}">Get</button>
-                ${setBtnHtml}
+            <td>
+                <div class="config-table-actions">
+                    <button class="btn btn-secondary cfg-get" data-id="${cfg.id}">Get</button>
+                    ${setBtnHtml}
+                </div>
             </td>
         </tr>`;
     }).join('');
