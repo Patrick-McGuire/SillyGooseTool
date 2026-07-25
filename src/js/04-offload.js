@@ -16,12 +16,16 @@ Telemetry.subscribe('offloadProgress', n => {
     });
 });
 
-function saveFlight(conn, lines, configLine = "", binChunks = null, messages = [], namePrefix = "Flight") {
+// opts fields (all optional): bootConfig, launchConfig (CONFIG text logged at boot / at ASCENT -
+// see Connection's currentBootConfig/currentLaunchConfig), binChunks (raw records, binary offloads
+// only), messages (conserved logMessage() text - see buildFlightText()), namePrefix.
+function saveFlight(conn, lines, opts = {}) {
+    const { bootConfig = "", launchConfig = "", binChunks = null, messages = [], namePrefix = "Flight" } = opts;
     const flightNum = flightData.length + 1;
     const flight = {
         id: Date.now(), name: `${namePrefix}_${flightNum}`, raw: [...lines],
-        config: configLine || "", profileId: conn.profile.id, connectionId: conn.id,
-        messages: [...messages], // logMessage() text conserved alongside the data - see buildFlightText()
+        bootConfig, launchConfig, profileId: conn.profile.id, connectionId: conn.id,
+        messages: [...messages],
     };
     // Exact byte-for-byte raw records, present only for binary offloads.
     if (binChunks && binChunks.length) flight.bin = concatChunks(binChunks);
@@ -87,21 +91,78 @@ const CONFIG_VALUE_FORMATTERS = {
     BOARD_ORIENTATION: v => `${BOARD_ORIENTATION_NAMES[parseInt(v)] || '?'} (${v})`,
 };
 
+// Parses one CONFIG text line ("CONFIG\tNAME=value\t...") into an ordered [{key, value}] list.
+function parseConfigLine(configLine) {
+    const body = configLine.replace(/^CONFIG[\s\t]+/, '');
+    return body.split(/[\t]+/).filter(p => p.length).map(p => {
+        const eq = p.indexOf('=');
+        return eq < 0 ? { key: p, value: null } : { key: p.slice(0, eq), value: p.slice(eq + 1) };
+    });
+}
+
+// Escaped since this gets interpolated straight into HTML below - BOARD_NAME/FIRMWARE_VERSION
+// are user-settable strings (CLI-editable, not compile-time constants), so this is the same
+// unescaped-content-into-innerHTML gap logTerm() had (see escapeHtml()'s comment in 09-main.js).
+function formatConfigValue(key, value) {
+    const formatted = CONFIG_VALUE_FORMATTERS[key] ? CONFIG_VALUE_FORMATTERS[key](value) : value;
+    return escapeHtml(formatted);
+}
+
+// Long comma-separated values (LAUNCH_ANGLE's 4 floats, GYROSCOPE_BIAS's 12) need to wrap onto
+// multiple lines within their cell/column instead of overflowing the modal - shared by both
+// renderers below.
+const CONFIG_VALUE_STYLE = "color:var(--accent); font-family:'Courier New',monospace; overflow-wrap:anywhere; word-break:break-word;";
+
+// Single-column fallback for when only one of the two snapshots exists (an older flight saved
+// before boot+launch logging existed, or one that never reached ASCENT).
+function renderSingleConfig(configLine) {
+    return parseConfigLine(configLine).map(({ key, value }) => {
+        if (value === null) return `<div style="padding:4px 0">${key}</div>`;
+        return `<div style="display:flex; justify-content:space-between; gap:10px; padding:4px 2px; border-bottom:1px solid #1e293b"><span style="color:#94a3b8; flex-shrink:0">${key}</span><span style="${CONFIG_VALUE_STYLE} text-align:right">${formatConfigValue(key, value)}</span></div>`;
+    }).join('');
+}
+
+// Renders boot vs launch CONFIG side by side, one row per field, so the same field's two values
+// sit right next to each other - values legitimately differing (GROUND_ELEVATION calibrating
+// during PRE_FLIGHT, etc.) is normal and expected, not something to flag; this is just about
+// keeping the two snapshots aligned by key instead of two separately-scrolled lists.
+function renderConfigComparison(bootLine, launchLine) {
+    const bootMap = new Map(parseConfigLine(bootLine).map(p => [p.key, p.value]));
+    const launchMap = new Map(parseConfigLine(launchLine).map(p => [p.key, p.value]));
+    // Union of keys, boot's order first - covers the common case (both sides have the exact same
+    // fields) with launch-only fields (a schema change mid-flight) appended after.
+    const keys = [...bootMap.keys()];
+    for (const k of launchMap.keys()) if (!bootMap.has(k)) keys.push(k);
+
+    const rows = keys.map(k => {
+        return `<tr>
+            <td class="config-table-label" style="overflow-wrap:anywhere">${k}</td>
+            <td style="${CONFIG_VALUE_STYLE}">${bootMap.has(k) ? formatConfigValue(k, bootMap.get(k)) : '—'}</td>
+            <td style="${CONFIG_VALUE_STYLE}">${launchMap.has(k) ? formatConfigValue(k, launchMap.get(k)) : '—'}</td>
+        </tr>`;
+    }).join('');
+
+    // table-layout:fixed + explicit column widths so wrapping is predictable - otherwise a huge
+    // unwrapped GYROSCOPE_BIAS value could force its column wide before the browser ever wraps it.
+    return `<table class="config-table" style="table-layout:fixed; width:100%">
+        <colgroup><col style="width:34%"><col style="width:33%"><col style="width:33%"></colgroup>
+        <thead><tr><th>Field</th><th>At Boot</th><th>At Launch</th></tr></thead>
+        <tbody>${rows}</tbody>
+    </table>`;
+}
+
 function openConfigModal() {
     const contentEl = document.getElementById('config-content');
     const f = (selectedIdx >= 0) ? flightData[selectedIdx] : null;
-    if (!f || !f.config) {
+    if (!f || (!f.bootConfig && !f.launchConfig)) {
         contentEl.innerHTML = '<div style="color:#94a3b8">No configuration available for this flight.</div>';
+    } else if (!f.bootConfig || !f.launchConfig) {
+        // Only one snapshot exists - a diff table would misleadingly flag every field as
+        // "changed" just because the other whole side is missing, so show plainly instead.
+        const which = f.bootConfig ? 'At boot' : 'At launch (ASCENT)';
+        contentEl.innerHTML = `<div style="font-weight:600; color:#cbd5e1; padding:4px 0">${which} (only snapshot available)</div>${renderSingleConfig(f.bootConfig || f.launchConfig)}`;
     } else {
-        const body = f.config.replace(/^CONFIG[\s\t]+/, '');
-        const pairs = body.split(/[\t]+/).filter(p => p.length);
-        contentEl.innerHTML = pairs.map(p => {
-            const eq = p.indexOf('=');
-            if (eq < 0) return `<div style="padding:4px 0">${p}</div>`;
-            const k = p.slice(0, eq), v = p.slice(eq + 1);
-            const display = CONFIG_VALUE_FORMATTERS[k] ? CONFIG_VALUE_FORMATTERS[k](v) : v;
-            return `<div style="display:flex; justify-content:space-between; padding:4px 2px; border-bottom:1px solid #1e293b"><span style="color:#94a3b8">${k}</span><span style="color:var(--accent); font-family:'Courier New',monospace">${display}</span></div>`;
-        }).join('');
+        contentEl.innerHTML = renderConfigComparison(f.bootConfig, f.launchConfig);
     }
     document.getElementById('config-modal').style.display = 'flex';
 }
@@ -232,7 +293,9 @@ function clearAllSession() {
 function buildFlightText(f) {
     const header = profileForFlight(f).header;
     const parts = [];
-    if (f.config) parts.push(f.config);
+    // Both CONFIG snapshots (boot, then launch) at the top, ahead of the header/data rows.
+    if (f.bootConfig) parts.push(f.bootConfig);
+    if (f.launchConfig) parts.push(f.launchConfig);
     parts.push(header.join("\t"));
     parts.push(f.raw.join("\n"));
     if (f.messages && f.messages.length) parts.push(f.messages.map(m => `MSG\t${m.afterRow}\t${m.text}`).join("\n"));
@@ -277,11 +340,12 @@ document.getElementById('file-upload').addEventListener('change', function (e) {
         const contents = e.target.result;
         const allLines = contents.split('\n').map(line => line.trim()).filter(line => line);
 
-        // Optional first line: CONFIG row (saved by this tool when offloaded from device)
-        let loadedConfig = "";
-        if (allLines.length > 0 && (allLines[0].startsWith("CONFIG\t") || allLines[0].startsWith("CONFIG "))) {
-            loadedConfig = allLines.shift();
-        }
+        // Optional leading CONFIG lines: boot snapshot, then launch snapshot (saved by this tool
+        // when offloaded from device) - shift however many are actually present (0, 1, or 2).
+        const isConfigLine = l => l.startsWith("CONFIG\t") || l.startsWith("CONFIG ");
+        let loadedBootConfig = "", loadedLaunchConfig = "";
+        if (allLines.length > 0 && isConfigLine(allLines[0])) loadedBootConfig = allLines.shift();
+        if (allLines.length > 0 && isConfigLine(allLines[0])) loadedLaunchConfig = allLines.shift();
 
         // Keep only data rows. Drops any non-data preamble (column header in either
         // firmware or website format, "Logger setup" boot marker, stray MSG lines, etc.)
@@ -308,7 +372,8 @@ document.getElementById('file-upload').addEventListener('change', function (e) {
             id: Date.now(),
             name: file.name.replace('.txt', ''),
             raw: lines,
-            config: loadedConfig,
+            bootConfig: loadedBootConfig,
+            launchConfig: loadedLaunchConfig,
             profileId,
             messages
         };

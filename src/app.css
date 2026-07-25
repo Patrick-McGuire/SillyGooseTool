@@ -144,6 +144,10 @@
             background: var(--card-bg); padding: 20px; border-radius: 12px; width: 420px;
             border: 1px solid var(--border); max-height: 80vh; overflow-y: auto;
         }
+        /* Wider than the shared 420px default: the boot/launch comparison table needs more room
+           for three columns, especially GYROSCOPE_BIAS/LAUNCH_ANGLE's long comma-separated
+           per-component float lists (still wrapped within their column - see .config-table td). */
+        #config-modal .modal-box { width: 640px; max-width: 92vw; }
         .series-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 20px 0; }
         .series-opt { font-size: 0.85rem; display: flex; align-items: center; gap: 10px; cursor: pointer; color: #cbd5e1; }
 

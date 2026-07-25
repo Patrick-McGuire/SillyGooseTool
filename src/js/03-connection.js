@@ -26,7 +26,11 @@ class Connection {
         this.simActive = false; // true while the Simulation tab holds the writable stream locked
         this.currentFlightLines = [];
         this.currentFlightBin = [];
-        this.currentConfigLine = "";
+        // Firmware now logs a CONFIG snapshot twice per flight - once at boot, once at ASCENT
+        // (launch) - since config can change between the two (CLI edits on the pad). First
+        // "CONFIG\t..." line/record seen this flight -> boot, second -> launch.
+        this.currentBootConfig = "";
+        this.currentLaunchConfig = "";
         // Arbitrary logMessage() text seen mid-offload (anything beyond the "Logger setup" /
         // "Ending Offload" / "CONFIG" control lines handled inline below) - e.g. the watchdog-reset
         // notice. Kept out of currentFlightLines so it can never reach plotFlight()'s numeric
@@ -41,8 +45,14 @@ class Connection {
         // radio/serial packet, same text format an offload produces. Reset
         // whenever streaming (re)starts - see 05-live-stream.js.
         this.streamLogLines = [];
+        // Arbitrary text (m_debug->message()/warn()/error()/debug() calls firing mid-flight)
+        // seen while streaming - same conservation as currentFlightMessages, for the streaming
+        // path. logMessage()-sourced text can never appear here since it only ever writes to
+        // flash, with no live echo. Reset alongside streamLogLines.
+        this.currentStreamMessages = [];
 
         this.binMsgBytes = [];
+        this.binConfigBytes = [];
     }
 
     // Switches the active altimeter profile, refreshing everything derived from
@@ -169,7 +179,7 @@ class Connection {
         if (line.includes("Remaining log length:")) Telemetry.set('logRemaining', formatLogTime(line.split(':').pop().trim()));
         if (line.includes("Logging")) Telemetry.set('logStatus', line.includes("enabled") ? "ON" : "OFF");
 
-        if (line.includes("Streaming enabled")) { this.streaming = true; this.liveDataBuffer = []; this.streamLogLines = []; Telemetry.set('streaming', true); }
+        if (line.includes("Streaming enabled")) { this.streaming = true; this.liveDataBuffer = []; this.streamLogLines = []; this.currentStreamMessages = []; Telemetry.set('streaming', true); }
         if (line.includes("Streaming disabled")) { this.streaming = false; Telemetry.set('streaming', false); }
 
         const setMatch = line.match(/MSG:\s+([A-Z_]+)\s+is set to:\s+(.+)/);
@@ -179,18 +189,30 @@ class Connection {
         }
 
         if (line.includes("Starting Offload")) {
-            this.recording = true; this.currentFlightLines = []; this.currentFlightBin = []; this.currentConfigLine = ""; this.currentFlightMessages = [];
+            this.recording = true; this.currentFlightLines = []; this.currentFlightBin = [];
+            this.currentBootConfig = ""; this.currentLaunchConfig = ""; this.currentFlightMessages = [];
             Telemetry.set('offloadProgress', 0);
             setBusy(true);
             return;
         }
 
-        if (this.streaming && isDataRow) handleLiveLine(this, line);
+        if (this.streaming) {
+            if (isDataRow) handleLiveLine(this, line);
+            // "Streaming enabled"/"disabled" are session-boundary signals, already handled
+            // above - not arbitrary logged text, so excluded here same as the recording
+            // block excludes "Logger setup"/"Ending Offload"/"CONFIG".
+            else if (!line.includes("Streaming enabled") && !line.includes("Streaming disabled")) {
+                handleLiveMessage(this, line);
+            }
+        }
 
         if (this.recording) {
             if (line.includes("Logger setup")) { this.flushRecordedFlight(); return; }
             if (line.includes("Ending Offload")) { this.flushRecordedFlight(); this.recording = false; Telemetry.set('offloadProgress', null); setBusy(false); return; }
-            if (line.startsWith("CONFIG\t") || line.startsWith("CONFIG ")) { this.currentConfigLine = line; return; }
+            if (line.startsWith("CONFIG\t") || line.startsWith("CONFIG ")) {
+                if (!this.currentBootConfig) this.currentBootConfig = line; else this.currentLaunchConfig = line;
+                return;
+            }
             if (isDataRow) { this.currentFlightLines.push(line); this.recordOffloadProgress(); }
             // Anything else during a recording is arbitrary logged text (data rows always start
             // with a digit timestamp, so this is an exhaustive - not best-effort - classifier).
@@ -199,15 +221,21 @@ class Connection {
         if (line.includes("Erase Complete")) setBusy(false);
     }
 
-    // Publishes the running row count every 250 rows rather than every row -
+    // Publishes the running row count every 100 rows rather than every row -
     // frequent enough to look live, far too infrequent to be a perf concern.
     recordOffloadProgress() {
-        if (this.currentFlightLines.length % 250 === 0) Telemetry.set('offloadProgress', this.currentFlightLines.length);
+        if (this.currentFlightLines.length % 100 === 0) Telemetry.set('offloadProgress', this.currentFlightLines.length);
     }
 
     flushRecordedFlight() {
-        if (this.currentFlightLines.length > 5) saveFlight(this, this.currentFlightLines, this.currentConfigLine, this.currentFlightBin, this.currentFlightMessages);
-        this.currentFlightLines = []; this.currentFlightBin = []; this.currentConfigLine = ""; this.currentFlightMessages = [];
+        if (this.currentFlightLines.length > 5) {
+            saveFlight(this, this.currentFlightLines, {
+                bootConfig: this.currentBootConfig, launchConfig: this.currentLaunchConfig,
+                binChunks: this.currentFlightBin, messages: this.currentFlightMessages
+            });
+        }
+        this.currentFlightLines = []; this.currentFlightBin = [];
+        this.currentBootConfig = ""; this.currentLaunchConfig = ""; this.currentFlightMessages = [];
     }
 
     // Flush an accumulated binary message record into the normal line handler
@@ -221,11 +249,25 @@ class Connection {
         if (str) this.processLine(str);
     }
 
+    // Flush an accumulated binary CONFIG record: decode it against the active profile's field
+    // layout and synthesize the same "CONFIG\tNAME=value\t..." text form processLine()'s text-mode
+    // CONFIG capture already produces, so both wire formats end up in the same bootConfig/
+    // launchConfig slots regardless of source.
+    flushBinConfig() {
+        if (!this.binConfigBytes.length || !this.recording) { this.binConfigBytes = []; return; }
+        const bytes = new Uint8Array(this.binConfigBytes);
+        this.binConfigBytes = [];
+        const decoded = decodeConfigRecord(bytes, this.profile.configFields);
+        const asText = formatConfigAsText(decoded, this.profile.configFields);
+        if (!this.currentBootConfig) this.currentBootConfig = asText; else this.currentLaunchConfig = asText;
+    }
+
     processBinRecord(id, rec) {
         if (id !== LOG_MESSAGE_CONTINUATION) this.flushBinMessage();
-        // Exact raw mirror of every non-corrupt flash record (data, message, new-flight alike) -
-        // matches the firmware's own binary-offload framing, which never distinguished record
-        // types on the wire either. Text reconstruction below is a separate, additional path.
+        if (id !== LOG_CONFIG_CONTINUATION) this.flushBinConfig();
+        // Exact raw mirror of every non-corrupt flash record (data, message, config, new-flight
+        // alike) - matches the firmware's own binary-offload framing, which never distinguished
+        // record types on the wire either. Text reconstruction below is a separate, additional path.
         if (this.recording) this.currentFlightBin.push(rec);
         if (id === LOG_DATA) {
             if (this.recording) {
@@ -234,6 +276,8 @@ class Connection {
             }
         } else if (id === LOG_MESSAGE || id === LOG_MESSAGE_CONTINUATION) {
             for (let i = 1; i < rec.length; i++) this.binMsgBytes.push(rec[i]);
+        } else if (id === LOG_CONFIG || id === LOG_CONFIG_CONTINUATION) {
+            for (let i = 1; i < rec.length; i++) this.binConfigBytes.push(rec[i]);
         }
         // LOG_NEW_FLIGHT: flight splitting is driven by the "Logger setup" message
     }
@@ -311,7 +355,7 @@ class Connection {
                         } else { // 'records' or 'skip'
                             if (buf.length >= 1 && buf[0] === LOG_EMPTY) {
                                 buf = buf.slice(1);
-                                if (mode === 'records') this.flushBinMessage();
+                                if (mode === 'records') { this.flushBinMessage(); this.flushBinConfig(); }
                                 mode = 'text';
                                 progress = true;
                             } else if (buf.length >= recordSize) {

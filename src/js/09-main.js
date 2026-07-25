@@ -14,8 +14,20 @@ let termBuffer = "";
 let cmdHistory = [];
 let historyIdx = -1;
 
+function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// msg is arbitrary logged text (device output, error strings, CONFIG lines...) - escaped before
+// building the HTML string, since insertAdjacentHTML below renders it as real markup. Without
+// this, any logged text containing '<'/'>' (e.g. a literal "<unable to decode: ...>" fallback
+// message) corrupts the terminal's DOM instead of just printing oddly.
 function logTerm(msg, color = "#00ff41") {
-    termBuffer += `<div style="color:${color}">[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+    termBuffer += `<div style="color:${color}">[${new Date().toLocaleTimeString()}] ${escapeHtml(msg)}</div>`;
+}
+
+function clearTerm() {
+    document.getElementById('terminal').innerHTML = '';
 }
 
 setInterval(() => {

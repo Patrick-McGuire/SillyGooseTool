@@ -62,11 +62,20 @@ function stopStreamLogging() {
     if (window.sgStreamLog) window.sgStreamLog.stop().catch(() => {});
 }
 
+// Conserves arbitrary text seen mid-stream (see currentStreamMessages in 03-connection.js),
+// tagged the same "MSG\t<rowIndex>\t<text>" way buildFlightText() uses for offloaded flights.
+// The desktop incremental file is written in true arrival order already, so pushing the tagged
+// line into the same streamLogPending queue lands it interleaved at its real position for free.
+function handleLiveMessage(conn, line) {
+    conn.currentStreamMessages.push({ afterRow: conn.streamLogLines.length, text: line });
+    streamLogPending.push(`MSG\t${conn.streamLogLines.length}\t${line}`);
+}
+
 const saveStreamLogBtn = document.getElementById('saveStreamLogBtn');
 if (saveStreamLogBtn) saveStreamLogBtn.onclick = () => {
     const conn = ConnectionManager.getActive();
     if (!conn.streamLogLines.length) { alert('No streamed data captured yet this session.'); return; }
-    saveFlight(conn, conn.streamLogLines, "", null, [], "Stream");
+    saveFlight(conn, conn.streamLogLines, { messages: conn.currentStreamMessages, namePrefix: "Stream" });
 };
 
 // Redraws a live Plotly chart at most this often, independent of how fast

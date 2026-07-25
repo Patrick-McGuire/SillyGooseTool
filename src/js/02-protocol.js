@@ -65,6 +65,109 @@ const RADIO_CONFIGS = [
     { id: "RADIO_TRANSMIT_INTERVAL", label: "Radio TX Interval (milliseconds)" }
 ];
 
+// Byte layout for a decoded LOG_CONFIG record's payload (see BasicLogger::logConfig() /
+// Configuration::getConfigDataBuffer()) - in firmware's declared/sorted-ID order
+// (ConfigurationRegistry.h), which is also assignMemory()'s field-placement order. SillyGoose
+// registers everything except the 3 radio fields; SeriousGoose registers all of them. This is a
+// DIFFERENT list from SILLY_GOOSE_CONFIGS/RADIO_CONFIGS above (those drive the editable-config
+// UI widget list and omit several fields - FLIGHT_STATE, BOARD_ORIENTATION, LAUNCH_ANGLE,
+// GYROSCOPE_BIAS - that still exist in the binary snapshot and must be decodable here).
+const CONFIG_FIELD_DEFS = [
+    { name: "BOARD_NAME", type: "str", size: 100, align: 1 },
+    { name: "FIRMWARE_VERSION", type: "str", size: 20, align: 1 },
+    { name: "FLIGHT_STATE", type: "i32", size: 4, align: 4 },
+    { name: "GROUND_ELEVATION", type: "f32", size: 4, align: 4 },
+    { name: "GROUND_TEMPERATURE", type: "f32", size: 4, align: 4 },
+    { name: "BOARD_ORIENTATION", type: "i32", size: 4, align: 4 },
+    { name: "LAUNCH_ANGLE", type: "quat", size: 16, align: 4 },
+    { name: "GYROSCOPE_BIAS", type: "gbias", size: 48, align: 4 },
+    { name: "PYRO_FIRE_DURATION", type: "u32", size: 4, align: 4 },
+    { name: "MAIN_ELEVATION", type: "f32", size: 4, align: 4 },
+    { name: "DROGUE_DELAY", type: "u32", size: 4, align: 4 },
+    { name: "BATTERY_VOLTAGE_SENSOR_SCALE_FACTOR", type: "f32", size: 4, align: 4 },
+    { name: "RADIO_FREQUENCY", type: "f32", size: 4, align: 4, radioOnly: true },
+    { name: "LORA_SPREADING_FACTOR", type: "i32", size: 4, align: 4, radioOnly: true },
+    { name: "RADIO_TRANSMIT_INTERVAL", type: "u32", size: 4, align: 4, radioOnly: true },
+    { name: "BUZZER_ENABLED", type: "u32", size: 4, align: 4 },
+];
+
+// Computes each field's byte offset the same way firmware's Configuration::assignMemory() does
+// (round up to the field's own alignment, place, advance). The JS has no live Configuration
+// object to borrow already-computed offsets from (unlike firmware's own offload-time
+// reconstruction), so this has to actually redo the alignment math.
+function layoutConfigFields(fields) {
+    let offset = 0;
+    return fields.map(f => {
+        offset = Math.ceil(offset / f.align) * f.align;
+        const laidOut = { ...f, offset };
+        offset += f.size;
+        return laidOut;
+    });
+}
+const SILLY_GOOSE_CONFIG_FIELDS = layoutConfigFields(CONFIG_FIELD_DEFS.filter(f => !f.radioOnly));
+const SERIOUS_GOOSE_CONFIG_FIELDS = layoutConfigFields(CONFIG_FIELD_DEFS);
+
+function decodeConfigField(dv, field) {
+    const o = field.offset;
+    switch (field.type) {
+        case "str": {
+            const bytes = new Uint8Array(dv.buffer, dv.byteOffset + o, field.size);
+            const nul = bytes.indexOf(0);
+            return new TextDecoder().decode(bytes.slice(0, nul >= 0 ? nul : field.size));
+        }
+        case "i32": return dv.getInt32(o, true);
+        case "u32": return dv.getUint32(o, true);
+        case "f32": return dv.getFloat32(o, true);
+        case "quat": return [0, 1, 2, 3].map(i => dv.getFloat32(o + i * 4, true));
+        case "gbias": return [0, 1, 2, 3].map(i => [0, 1, 2].map(j => dv.getFloat32(o + (i * 3 + j) * 4, true)));
+        default: return null;
+    }
+}
+
+// Decodes one reconstructed LOG_CONFIG record (8-byte {version,keyCrc} header + raw config
+// bytes - see BasicLogger::logConfig()) using a board profile's field layout. keyCrc can't be
+// independently re-verified here: firmware's CRC hashes opaque compile-time enum values the JS
+// has no way to reproduce, so it's surfaced for display only - decoded-length-vs-expected is the
+// structural sanity check instead. Uses >= rather than == : logChunked() pads the last chunk up
+// to a full dataSize multiple, so the reconstructed payload is always at least as long as the
+// real fields, usually longer (trailing zero padding, never read here).
+function decodeConfigRecord(bytes, configFields) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+    const version = dv.getUint32(0, true);
+    const keyCrc = dv.getUint32(4, true);
+    const payload = new DataView(bytes.buffer, bytes.byteOffset + 8, bytes.length - 8);
+    const expectedLen = configFields.length ? configFields[configFields.length - 1].offset + configFields[configFields.length - 1].size : 0;
+    const fields = {};
+    for (const f of configFields) {
+        if (f.offset + f.size > payload.byteLength) break;
+        fields[f.name] = decodeConfigField(payload, f);
+    }
+    return { version, keyCrc, fields, lengthMatches: payload.byteLength >= expectedLen };
+}
+
+function formatConfigFieldValue(value, type) {
+    switch (type) {
+        case "f32": return value.toFixed(8);
+        case "quat": return value.map(v => v.toFixed(8)).join(",");
+        case "gbias": return value.map(triplet => triplet.map(v => v.toFixed(8)).join(",")).join(",");
+        default: return String(value); // str, i32, u32
+    }
+}
+
+// Synthesizes the same "CONFIG\tNAME=value\t..." text a text-mode offload's firmware-side
+// formatter (Configuration::formatBufferAsText()) would produce, from a decodeConfigRecord()
+// result - so a binary-sourced CONFIG record ends up in the exact same bootConfig/launchConfig
+// text form as a text-sourced one, and both can share one display/export code path.
+function formatConfigAsText(decoded, configFields) {
+    const parts = ["CONFIG"];
+    for (const f of configFields) {
+        if (!(f.name in decoded.fields)) continue;
+        parts.push(`${f.name}=${formatConfigFieldValue(decoded.fields[f.name], f.type)}`);
+    }
+    parts.push(`CONFIGURATION_VERSION=${decoded.version}`);
+    return parts.join("\t");
+}
+
 // Firmware's FlightState enum (see Avionics.h) - the canonical source for every
 // place that turns a raw flightState int into a label (Offload's graph/summary,
 // the Live Map widget, the config viewer's FLIGHT_STATE formatter).
@@ -149,6 +252,7 @@ const ALTIMETER_PROFILES = {
             return formatDecodedRow([...common.fields, ...pyro.fields, ...orient.fields]);
         },
         configs: SILLY_GOOSE_CONFIGS,
+        configFields: SILLY_GOOSE_CONFIG_FIELDS,
         firmwareVariants: [
             { value: "V1", label: "SillyGoose V1" },
             { value: "V2", label: "SillyGoose V2" }
@@ -202,6 +306,7 @@ const ALTIMETER_PROFILES = {
             return formatDecodedRow(all);
         },
         configs: [...SILLY_GOOSE_CONFIGS, ...RADIO_CONFIGS],
+        configFields: SERIOUS_GOOSE_CONFIG_FIELDS,
         firmwareVariants: [{ value: "V1", label: "SeriousGoose V1" }],
         // Anchored + negative lookahead so "SeriousGooseGroundV1" (a different
         // board family) doesn't also match this regex - it starts with the same
@@ -224,7 +329,7 @@ const ALL_BOARD_FAMILIES = { ...ALTIMETER_PROFILES, ...NON_LOGGING_BOARD_FAMILIE
 
 // --- Binary offload protocol (mirrors firmware BasicLogger.h) ---
 const BIN_MAGIC = [0x53, 0x47, 0x42]; // 'SGB'
-const LOG_EMPTY = 0xFF, LOG_DATA = 0x01, LOG_NEW_FLIGHT = 0x02, LOG_MESSAGE = 0x03, LOG_MESSAGE_CONTINUATION = 0x04;
+const LOG_EMPTY = 0xFF, LOG_DATA = 0x01, LOG_NEW_FLIGHT = 0x02, LOG_MESSAGE = 0x03, LOG_MESSAGE_CONTINUATION = 0x04, LOG_CONFIG = 0x05, LOG_CONFIG_CONTINUATION = 0x06;
 // CRC-16/CCITT (poly 0x1021, init 0xFFFF) — matches firmware src/util/CRC.h crc16().
 function crc16(bytes) {
     let crc = 0xFFFF;
