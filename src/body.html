@@ -31,6 +31,7 @@
             <button class="tab-btn" onclick="openTab('live-tab')">Live Graph</button>
             <button class="tab-btn" onclick="openTab('live-map-tab')">Live Map</button>
             <button class="tab-btn" onclick="openTab('config-tab')">System Configuration</button>
+            <button class="tab-btn" onclick="openTab('sim-tab')">Simulation</button>
             <button class="tab-btn" id="fw-tab-btn" onclick="openTab('firmware-tab')">Firmware</button>
         </div>
         <div class="header-right">
@@ -216,6 +217,48 @@
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <div id="sim-tab" class="tab-content">
+        <div class="fw-panel">
+            <div style="font-size: 0.75rem; color: #94a3b8;">SENSOR SIMULATION</div>
+            <div style="font-size:0.8rem; color:#cbd5e1; line-height:1.45;">
+                Replays a recorded flight log back to the board as raw sensor data (--sim), for
+                testing state estimation and flight logic without a real flight. The connected
+                board must be running a *Sim firmware build.
+            </div>
+
+            <!-- Shown only in the browser build, where there's no native file dialog / fs access. -->
+            <div id="sim-desktop-only" style="display:none; font-size:0.8rem; color:#f59e0b; border:1px solid #f59e0b55; background:#f59e0b11; border-radius:6px; padding:8px 10px; line-height:1.45;">
+                ⚠ Simulation replay only works in the SillyGooseTool <b>desktop app</b> — this web
+                version can't access the filesystem to read a log file.
+                <a href="https://github.com/Patrick-McGuire/SillyGooseTool/releases/latest" target="_blank" style="color:#f59e0b; text-decoration:underline;">Download the desktop app</a>.
+            </div>
+
+            <div class="fw-field">
+                <label class="fw-label">Log File</label>
+                <div style="display:flex; gap:8px; align-items:center; min-width:0;">
+                    <button id="sim-choose-btn" class="btn btn-secondary" style="width:120px">Choose File</button>
+                    <span id="sim-file-name" style="font-size:0.75rem; color:#94a3b8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
+                </div>
+            </div>
+            <div id="sim-file-info" style="font-size:0.75rem; color:#94a3b8; min-height:1.2em;"></div>
+
+            <div class="fw-field">
+                <label class="fw-label">Start Offset (seconds, blank = auto)</label>
+                <input type="number" id="sim-start-offset" placeholder="auto" style="background:#111827; border:1px solid var(--border); color:white; padding:6px; border-radius:6px; width:120px">
+            </div>
+
+            <div style="display:flex; gap:10px; align-items:center; margin-top:4px;">
+                <button id="sim-start-btn" class="btn" style="width:120px" disabled>Start</button>
+                <button id="sim-stop-btn" class="btn btn-danger" style="width:120px; display:none">Stop</button>
+            </div>
+
+            <div id="sim-progress-wrap" style="display:none; background:#111827; border:1px solid var(--border); border-radius:6px; height:10px; overflow:hidden;">
+                <div id="sim-progress-bar" style="height:100%; width:0%; background:var(--accent); transition:width .15s;"></div>
+            </div>
+            <div id="sim-status" style="font-size:0.8rem; color:#cbd5e1; min-height:1.2em;"></div>
         </div>
     </div>
 

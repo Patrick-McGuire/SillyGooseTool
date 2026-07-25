@@ -32,3 +32,10 @@ contextBridge.exposeInMainWorld('sgStreamLog', {
   // Closes the current log file, if any.
   stop: () => ipcRenderer.invoke('stream-log:stop')
 });
+
+// Simulation replay file picker (desktop-only, same as sgFirmware above) - the
+// renderer feature-detects `window.sgSimulation`.
+contextBridge.exposeInMainWorld('sgSimulation', {
+  // Pick a log file to replay; returns { path, name, text } or null if canceled.
+  chooseFile: () => ipcRenderer.invoke('simulation:choose-file')
+});

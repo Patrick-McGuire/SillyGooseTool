@@ -16,11 +16,12 @@ Telemetry.subscribe('offloadProgress', n => {
     });
 });
 
-function saveFlight(conn, lines, configLine = "", binChunks = null, namePrefix = "Flight") {
+function saveFlight(conn, lines, configLine = "", binChunks = null, messages = [], namePrefix = "Flight") {
     const flightNum = flightData.length + 1;
     const flight = {
         id: Date.now(), name: `${namePrefix}_${flightNum}`, raw: [...lines],
-        config: configLine || "", profileId: conn.profile.id, connectionId: conn.id
+        config: configLine || "", profileId: conn.profile.id, connectionId: conn.id,
+        messages: [...messages], // logMessage() text conserved alongside the data - see buildFlightText()
     };
     // Exact byte-for-byte raw records, present only for binary offloads.
     if (binChunks && binChunks.length) flight.bin = concatChunks(binChunks);
@@ -225,12 +226,16 @@ function clearAllSession() {
     }
 }
 
+// Message lines never start with a digit (data rows always do, per their timestamp column), so
+// tagging them "MSG\t<rowIndex>\t<text>" is enough to round-trip through the file-upload filter
+// below without colliding with data rows - no need to interleave them into the row sequence itself.
 function buildFlightText(f) {
     const header = profileForFlight(f).header;
     const parts = [];
     if (f.config) parts.push(f.config);
     parts.push(header.join("\t"));
     parts.push(f.raw.join("\n"));
+    if (f.messages && f.messages.length) parts.push(f.messages.map(m => `MSG\t${m.afterRow}\t${m.text}`).join("\n"));
     return parts.join("\n");
 }
 
@@ -283,6 +288,14 @@ document.getElementById('file-upload').addEventListener('change', function (e) {
         // so older raw serial captures load without modification.
         const lines = allLines.filter(line => /^\d/.test(line));
 
+        // This tool's own exports tag conserved logMessage() text as "MSG\t<rowIndex>\t<text>"
+        // (see buildFlightText()) - recover those here so re-loading a saved flight doesn't
+        // silently drop them again.
+        const messages = allLines.filter(line => line.startsWith("MSG\t")).map(line => {
+            const parts = line.split('\t');
+            return { afterRow: parseInt(parts[1], 10) || 0, text: parts.slice(2).join('\t') };
+        });
+
         if (lines.length === 0) {
             logTerm(`Skipped ${file.name}: no data rows found`, "red");
             document.getElementById('file-upload').value = '';
@@ -296,7 +309,8 @@ document.getElementById('file-upload').addEventListener('change', function (e) {
             name: file.name.replace('.txt', ''),
             raw: lines,
             config: loadedConfig,
-            profileId
+            profileId,
+            messages
         };
 
         flightData.push(newFlight);

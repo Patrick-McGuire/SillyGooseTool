@@ -6,14 +6,15 @@
 // layout, so adding a new board should only mean adding a new profile here.
 //
 // SeriousGoose's log struct is NOT just SillyGoose's struct with GPS fields
-// appended: its aux pyro channel (src/builds/SeriousGoose.cpp's
-// `auxContinuity`/`auxFired`) inserts 2 fields BEFORE the tilt/angularVel/
-// quaternion block SillyGoose also has, shifting every SillyGoose post-
-// mainFired column for SeriousGoose only. `COMMON_COLS` below only covers the
-// genuinely identical prefix (through mainFired) - each profile defines its
-// own columns past that. Per-flight code should look values up through the
-// flight's own profile's `cols` (see `profileForFlight()`), not assume the
-// two profiles agree beyond what COMMON_COLS guarantees.
+// appended: it inserts its raw magnetometer (magX/Y/Z) right after imuTemp,
+// BEFORE battV, and its aux pyro channel (`auxContinuity`/`auxFired`) right
+// after mainFired, before the tilt/angularVel/quaternion block SillyGoose
+// also has. Both insertions shift every subsequent SillyGoose column for
+// SeriousGoose only. `COMMON_COLS` below only covers the genuinely identical
+// prefix (timestampMs - the only field before the first insertion point) -
+// each profile defines the rest of its own `cols` past that. Per-flight code
+// should look values up through the flight's own profile's `cols` (see
+// `profileForFlight()`), not assume the two profiles agree beyond that.
 const SILLY_GOOSE_HEADER = [
     "timestampMs", "pressurePa", "tempK", "accelX", "accelY", "accelZ",
     "gyroX", "gyroY", "gyroZ", "imuTemp", "battV", "altitudeM",
@@ -24,25 +25,27 @@ const SILLY_GOOSE_HEADER = [
 ];
 const SERIOUS_GOOSE_HEADER = [
     "timestampMs", "pressurePa", "tempK", "accelX", "accelY", "accelZ",
-    "gyroX", "gyroY", "gyroZ", "imuTemp", "battV", "altitudeM",
+    "gyroX", "gyroY", "gyroZ", "imuTemp", "magX", "magY", "magZ", "battV", "altitudeM",
     "velocityMS", "accelerationMSS", "unfiltAlt", "flightState",
     "drogueCont", "drogueFired", "mainCont", "mainFired", "auxCont", "auxFired",
     "tiltMagnitudeDeg", "angularVelRadS_x", "angularVelRadS_y", "angularVelRadS_z",
     "quaternion_a", "quaternion_b", "quaternion_c", "quaternion_d",
     "gpsLatitudeDeg", "gpsLongitudeDeg", "gpsAltitudeM", "gpsUnixTimeS", "gpsHdop", "gpsVdop", "gpsFixQuality", "gpsSatellitesTracked"
 ];
-// Genuinely identical between every board so far. Pyro columns are NOT here -
-// see each profile's own `pyros` list below, since boards can have a
-// different number of pyro channels (SillyGoose: drogue+main; SeriousGoose:
-// +aux; a future board might have more still).
+// Genuinely identical between every board so far - just timestampMs, since
+// SeriousGoose's magX/Y/Z insertion (see comment above) shifts everything
+// from battV onward. Pyro columns are NOT here either - see each profile's
+// own `pyros` list below, since boards can have a different number of pyro
+// channels (SillyGoose: drogue+main; SeriousGoose: +aux; a future board
+// might have more still).
 const COMMON_COLS = {
-    timestampMs: 0, battV: 10, altitudeM: 11, velocityMS: 12, flightState: 15
+    timestampMs: 0
 };
 const SILLY_GOOSE_LOG_HEADER_STR = "timestampMs\tpressurePa\tbarometerTemperatureK\taccelerationMSS_x\taccelerationMSS_y\taccelerationMSS_z\tvelocityRadS_x\tvelocityRadS_y\tvelocityRadS_z\timuTemperatureK\tbatteryVoltageV\taltitudeM\tvelocityMS\taccelerationMSS\tunfilteredAltitudeM\tflightState\tdrogueContinuity\tdrogueFired\tmainContinuity\tmainFired\ttiltMagnitudeDeg\tangularVelRadS_x\tangularVelRadS_y\tangularVelRadS_z\tquaternion_a\tquaternion_b\tquaternion_c\tquaternion_d";
 // Must match SeriousGoose.cpp's LOG_HEADER macro byte-for-byte - it's hashed
 // (see crc16/headerCrcFor below) to auto-detect/validate a binary offload's
 // format, so any drift here silently breaks that detection instead of erroring.
-const SERIOUS_GOOSE_LOG_HEADER_STR = "timestampMs\tpressurePa\tbarometerTemperatureK\taccelerationMSS_x\taccelerationMSS_y\taccelerationMSS_z\tvelocityRadS_x\tvelocityRadS_y\tvelocityRadS_z\timuTemperatureK\tbatteryVoltageV\taltitudeM\tvelocityMS\taccelerationMSS\tunfilteredAltitudeM\tflightState\tdrogueContinuity\tdrogueFired\tmainContinuity\tmainFired\tauxContinuity\tauxFired\ttiltMagnitudeDeg\tangularVelRadS_x\tangularVelRadS_y\tangularVelRadS_z\tquaternion_a\tquaternion_b\tquaternion_c\tquaternion_d\tgpsLatitudeDeg\tgpsLongitudeDeg\tgpsAltitudeM\tgpsUnixTimeS\tgpsHdop\tgpsVdop\tgpsFixQuality\tgpsSatellitesTracked";
+const SERIOUS_GOOSE_LOG_HEADER_STR = "timestampMs\tpressurePa\tbarometerTemperatureK\taccelerationMSS_x\taccelerationMSS_y\taccelerationMSS_z\tvelocityRadS_x\tvelocityRadS_y\tvelocityRadS_z\timuTemperatureK\tmagFieldTeslaRaw_x\tmagFieldTeslaRaw_y\tmagFieldTeslaRaw_z\tbatteryVoltageV\taltitudeM\tvelocityMS\taccelerationMSS\tunfilteredAltitudeM\tflightState\tdrogueContinuity\tdrogueFired\tmainContinuity\tmainFired\tauxContinuity\tauxFired\ttiltMagnitudeDeg\tangularVelRadS_x\tangularVelRadS_y\tangularVelRadS_z\tquaternion_a\tquaternion_b\tquaternion_c\tquaternion_d\tgpsLatitudeDeg\tgpsLongitudeDeg\tgpsAltitudeM\tgpsUnixTimeS\tgpsHdop\tgpsVdop\tgpsFixQuality\tgpsSatellitesTracked";
 
 const SILLY_GOOSE_CONFIGS = [
     { id: "DROGUE_DELAY", label: "Drogue Delay (milliseconds)" },
@@ -67,24 +70,36 @@ const RADIO_CONFIGS = [
 // the Live Map widget, the config viewer's FLIGHT_STATE formatter).
 const FLIGHT_STATE_NAMES = { 0: "PRE_FLIGHT", 1: "ASCENT", 2: "DESCENT", 3: "POST_FLIGHT", 4: "UNKNOWN_FLIGHT_STATE" };
 
-// Decodes the 20 fields every board has in common (timestampMs through
-// mainFired) from a DataView positioned at the start of a LOG_DATA record
-// (byte 0 is the record id). Returns the fields plus the byte offset just
-// past them, so each profile's decodeDataRecord can keep decoding whatever
-// comes next in its own layout (see decodeOrientationFields for the other
-// shared block, and ALTIMETER_PROFILES for what's profile-specific).
+// Decodes the fields every board has in common (timestampMs through
+// imuTemperatureK) from a DataView positioned at the start of a LOG_DATA
+// record (byte 0 is the record id). Returns the fields plus the byte offset
+// just past them, so each profile's decodeDataRecord can keep decoding
+// whatever comes next in its own layout - SeriousGoose's raw mag floats sit
+// right here, shifting everything from battV onward for that board only
+// (see decodeBattThroughPyroFields/decodeOrientationFields for the other
+// shared blocks, and ALTIMETER_PROFILES for what's profile-specific).
 function decodeCommonFields(dv) {
     let o = 1; // skip the id byte
     const f = () => { const v = dv.getFloat32(o, true); o += 4; return v; };
     const u32 = () => { const v = dv.getUint32(o, true); o += 4; return v; };
+    const fields = [
+        u32(),         // timestampMs
+        f(), f(),      // pressurePa, barometerTemperatureK
+        f(), f(), f(), // accel x,y,z
+        f(), f(), f(), // gyro x,y,z
+        f(),           // imuTemperatureK
+    ];
+    return { fields, offset: o };
+}
+
+// Decodes battV through mainFired (10 fields) - identical layout on every
+// board so far, but its byte OFFSET varies (SeriousGoose's mag floats shift
+// it relative to SillyGoose), so callers pass in where it starts.
+function decodeBattThroughPyroFields(dv, o) {
+    const f = () => { const v = dv.getFloat32(o, true); o += 4; return v; };
     const i32 = () => { const v = dv.getInt32(o, true); o += 4; return v; };
     const b = () => dv.getUint8(o++);
     const fields = [
-        u32(),                   // timestampMs
-        f(), f(),                // pressurePa, barometerTemperatureK
-        f(), f(), f(),           // accel x,y,z
-        f(), f(), f(),           // gyro x,y,z
-        f(),                     // imuTemperatureK
         f(), f(), f(), f(), f(), // battV, altitudeM, velocityMS, accelerationMSS, unfilteredAltitudeM
         i32(),                   // flightState
         b(), b(), b(), b()       // drogueCont, drogueFired, mainCont, mainFired
@@ -116,7 +131,7 @@ const ALTIMETER_PROFILES = {
         binDataSize: 100, // sizeof(SillyGooseLogData), packed
         fwLogHeader: SILLY_GOOSE_LOG_HEADER_STR,
         defaultSeries: [11, 12, 13],
-        cols: { ...COMMON_COLS, tiltMagnitudeDeg: 20, angularVelX: 21, angularVelY: 22, angularVelZ: 23, quatA: 24, quatB: 25, quatC: 26, quatD: 27 },
+        cols: { ...COMMON_COLS, battV: 10, altitudeM: 11, velocityMS: 12, flightState: 15, tiltMagnitudeDeg: 20, angularVelX: 21, angularVelY: 22, angularVelZ: 23, quatA: 24, quatB: 25, quatC: 26, quatD: 27 },
         // Pyro channels as a list, not fixed named fields - a board with more
         // (or fewer) than these two just has a longer (or shorter) list here;
         // nothing downstream (Live Map badges, Control Panel Fire buttons,
@@ -128,9 +143,10 @@ const ALTIMETER_PROFILES = {
         hasGps: false,
         decodeDataRecord(rec) {
             const dv = new DataView(rec.buffer, rec.byteOffset, rec.length);
-            const { fields, offset } = decodeCommonFields(dv);
-            const orient = decodeOrientationFields(dv, offset);
-            return formatDecodedRow([...fields, ...orient.fields]);
+            const common = decodeCommonFields(dv);
+            const pyro = decodeBattThroughPyroFields(dv, common.offset);
+            const orient = decodeOrientationFields(dv, pyro.offset);
+            return formatDecodedRow([...common.fields, ...pyro.fields, ...orient.fields]);
         },
         configs: SILLY_GOOSE_CONFIGS,
         firmwareVariants: [
@@ -143,31 +159,38 @@ const ALTIMETER_PROFILES = {
         id: "SeriousGoose",
         displayName: "SeriousGoose",
         header: SERIOUS_GOOSE_HEADER,
-        oldMinCols: 36, // still a valid MINIMUM column count even post-aux-pyro (38 cols now) - not bumped
-        binDataSize: 124, // sizeof(SillyGooseLogData) in SeriousGoose.cpp, packed (100 + 2 aux bytes + 22 GPS bytes)
+        oldMinCols: 36, // still a valid MINIMUM column count even post-mag/aux-pyro (41 cols now) - not bumped
+        binDataSize: 136, // sizeof(SillyGooseLogData) in SeriousGoose.cpp, packed (100 + 12 mag bytes + 2 aux bytes + 22 GPS bytes)
         fwLogHeader: SERIOUS_GOOSE_LOG_HEADER_STR,
-        defaultSeries: [11, 12, 13],
+        defaultSeries: [14, 15, 16],
         cols: {
             ...COMMON_COLS,
-            tiltMagnitudeDeg: 22, angularVelX: 23, angularVelY: 24, angularVelZ: 25,
-            quatA: 26, quatB: 27, quatC: 28, quatD: 29,
-            gpsLat: 30, gpsLon: 31, gpsAlt: 32, gpsUnixTimeS: 33, gpsHdop: 34, gpsVdop: 35, gpsFixQuality: 36, gpsSatellites: 37
+            magX: 10, magY: 11, magZ: 12,
+            battV: 13, altitudeM: 14, velocityMS: 15, flightState: 18,
+            tiltMagnitudeDeg: 25, angularVelX: 26, angularVelY: 27, angularVelZ: 28,
+            quatA: 29, quatB: 30, quatC: 31, quatD: 32,
+            gpsLat: 33, gpsLon: 34, gpsAlt: 35, gpsUnixTimeS: 36, gpsHdop: 37, gpsVdop: 38, gpsFixQuality: 39, gpsSatellites: 40
         },
         pyros: [
-            { id: "drogue", label: "Drogue", contCol: 16, firedCol: 17, fireCmd: "--fire -d" },
-            { id: "main", label: "Main", contCol: 18, firedCol: 19, fireCmd: "--fire -m" },
-            { id: "aux", label: "Aux", contCol: 20, firedCol: 21, fireCmd: "--fire -a" }
+            { id: "drogue", label: "Drogue", contCol: 19, firedCol: 20, fireCmd: "--fire -d" },
+            { id: "main", label: "Main", contCol: 21, firedCol: 22, fireCmd: "--fire -m" },
+            { id: "aux", label: "Aux", contCol: 23, firedCol: 24, fireCmd: "--fire -a" }
         ],
         hasGps: true,
         decodeDataRecord(rec) {
             const dv = new DataView(rec.buffer, rec.byteOffset, rec.length);
-            const { fields, offset } = decodeCommonFields(dv);
-            let o = offset;
+            const common = decodeCommonFields(dv);
+            let o = common.offset;
+            const magX = dv.getFloat32(o, true); o += 4;
+            const magY = dv.getFloat32(o, true); o += 4;
+            const magZ = dv.getFloat32(o, true); o += 4;
+            const pyro = decodeBattThroughPyroFields(dv, o);
+            o = pyro.offset;
             const auxContinuity = dv.getUint8(o); o += 1;
             const auxFired = dv.getUint8(o); o += 1;
             const orient = decodeOrientationFields(dv, o);
             o = orient.offset;
-            const all = [...fields, auxContinuity, auxFired, ...orient.fields];
+            const all = [...common.fields, magX, magY, magZ, ...pyro.fields, auxContinuity, auxFired, ...orient.fields];
             all.push(dv.getFloat32(o, true)); o += 4; // gpsLatitudeDeg
             all.push(dv.getFloat32(o, true)); o += 4; // gpsLongitudeDeg
             all.push(dv.getFloat32(o, true)); o += 4; // gpsAltitudeM

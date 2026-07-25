@@ -410,6 +410,22 @@ ipcMain.handle('firmware:choose-local', async () => {
   return { path: uf2Path, name: path.basename(uf2Path) };
 });
 
+// Picks a flight log to replay on the Simulation tab. Reads it here (fast, off
+// the renderer thread) rather than via a browser FileReader - desktop-only
+// like the firmware picker above, for the same reason (no native dialog / fs
+// access from a plain browser tab).
+ipcMain.handle('simulation:choose-file', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Choose flight log to replay',
+    properties: ['openFile'],
+    filters: [{ name: 'Log files', extensions: ['txt', 'csv', 'log'] }, { name: 'All files', extensions: ['*'] }]
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  const filePath = result.filePaths[0];
+  const text = await fs.promises.readFile(filePath, 'utf8');
+  return { path: filePath, name: path.basename(filePath), text };
+});
+
 ipcMain.handle('firmware:flash', async (event, uf2Path) => {
   uf2Path = await validateUf2Path(uf2Path);
   // Poll for the bootloader drive (it takes a couple seconds to mount after the

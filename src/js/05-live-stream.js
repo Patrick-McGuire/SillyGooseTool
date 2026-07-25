@@ -66,7 +66,7 @@ const saveStreamLogBtn = document.getElementById('saveStreamLogBtn');
 if (saveStreamLogBtn) saveStreamLogBtn.onclick = () => {
     const conn = ConnectionManager.getActive();
     if (!conn.streamLogLines.length) { alert('No streamed data captured yet this session.'); return; }
-    saveFlight(conn, conn.streamLogLines, "", null, "Stream");
+    saveFlight(conn, conn.streamLogLines, "", null, [], "Stream");
 };
 
 // Redraws a live Plotly chart at most this often, independent of how fast

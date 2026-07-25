@@ -23,9 +23,15 @@ class Connection {
 
         this.recording = false;
         this.streaming = false;
+        this.simActive = false; // true while the Simulation tab holds the writable stream locked
         this.currentFlightLines = [];
         this.currentFlightBin = [];
         this.currentConfigLine = "";
+        // Arbitrary logMessage() text seen mid-offload (anything beyond the "Logger setup" /
+        // "Ending Offload" / "CONFIG" control lines handled inline below) - e.g. the watchdog-reset
+        // notice. Kept out of currentFlightLines so it can never reach plotFlight()'s numeric
+        // parsing; conserved here instead so it survives into the saved flight (see saveFlight()).
+        this.currentFlightMessages = [];
 
         this.liveDataBuffer = [];
         this.maxLivePoints = 200;
@@ -122,7 +128,9 @@ class Connection {
     }
 
     async sendCmd(msg) {
-        if (!this.port || !this.port.writable) return;
+        // The Simulation tab holds its own writer on this same stream for the whole run - a
+        // second concurrent writer would throw. See Simulation.run() in 10-simulation.js.
+        if (!this.port || !this.port.writable || this.simActive) return;
         setBusy(true);
         const writer = this.port.writable.getWriter();
         await writer.write(new TextEncoder().encode(msg + "\n"));
@@ -145,6 +153,15 @@ class Connection {
     // and the Live Graph tab's "last message age" cover the human-visible need
     // instead of a scrollback nobody reads in real time.
     processLine(line) {
+        // The firmware emits this every tick while a *Sim build is running (see
+        // SimulationParser::waitForEntry()) - route it to the flow-control loop instead of
+        // logging it, since at ~100Hz it would flood the terminal exactly like data rows do
+        // (see the perf note below).
+        if (this.simActive) {
+            const simSizeMatch = line.match(/^--simSize\s+(\d+)/);
+            if (simSizeMatch) { Simulation.onSizeReport(parseInt(simSizeMatch[1], 10)); return; }
+        }
+
         const isDataRow = /^\d/.test(line);
         if (!((this.recording || this.streaming) && isDataRow)) logTerm(line);
 
@@ -162,7 +179,7 @@ class Connection {
         }
 
         if (line.includes("Starting Offload")) {
-            this.recording = true; this.currentFlightLines = []; this.currentFlightBin = []; this.currentConfigLine = "";
+            this.recording = true; this.currentFlightLines = []; this.currentFlightBin = []; this.currentConfigLine = ""; this.currentFlightMessages = [];
             Telemetry.set('offloadProgress', 0);
             setBusy(true);
             return;
@@ -175,6 +192,9 @@ class Connection {
             if (line.includes("Ending Offload")) { this.flushRecordedFlight(); this.recording = false; Telemetry.set('offloadProgress', null); setBusy(false); return; }
             if (line.startsWith("CONFIG\t") || line.startsWith("CONFIG ")) { this.currentConfigLine = line; return; }
             if (isDataRow) { this.currentFlightLines.push(line); this.recordOffloadProgress(); }
+            // Anything else during a recording is arbitrary logged text (data rows always start
+            // with a digit timestamp, so this is an exhaustive - not best-effort - classifier).
+            else this.currentFlightMessages.push({ afterRow: this.currentFlightLines.length, text: line });
         }
         if (line.includes("Erase Complete")) setBusy(false);
     }
@@ -186,8 +206,8 @@ class Connection {
     }
 
     flushRecordedFlight() {
-        if (this.currentFlightLines.length > 5) saveFlight(this, this.currentFlightLines, this.currentConfigLine, this.currentFlightBin);
-        this.currentFlightLines = []; this.currentFlightBin = []; this.currentConfigLine = "";
+        if (this.currentFlightLines.length > 5) saveFlight(this, this.currentFlightLines, this.currentConfigLine, this.currentFlightBin, this.currentFlightMessages);
+        this.currentFlightLines = []; this.currentFlightBin = []; this.currentConfigLine = ""; this.currentFlightMessages = [];
     }
 
     // Flush an accumulated binary message record into the normal line handler
@@ -203,10 +223,13 @@ class Connection {
 
     processBinRecord(id, rec) {
         if (id !== LOG_MESSAGE_CONTINUATION) this.flushBinMessage();
+        // Exact raw mirror of every non-corrupt flash record (data, message, new-flight alike) -
+        // matches the firmware's own binary-offload framing, which never distinguished record
+        // types on the wire either. Text reconstruction below is a separate, additional path.
+        if (this.recording) this.currentFlightBin.push(rec);
         if (id === LOG_DATA) {
             if (this.recording) {
                 this.currentFlightLines.push(this.profile.decodeDataRecord(rec));
-                this.currentFlightBin.push(rec);
                 this.recordOffloadProgress();
             }
         } else if (id === LOG_MESSAGE || id === LOG_MESSAGE_CONTINUATION) {
