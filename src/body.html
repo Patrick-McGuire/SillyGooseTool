@@ -36,6 +36,12 @@
         </div>
         <div class="header-right">
             <div id="busy-loader" class="loader"></div>
+            <!-- Browser build only - Electron windows don't get throttled like a backgrounded
+                 browser tab does, so this warning doesn't apply there. Hidden by default and
+                 shown by JS only when window.sgFirmware etc. are absent - see 09-main.js. -->
+            <span id="stay-active-note" style="display:none; font-size:0.7rem; font-weight:700; color:#f59e0b; border:1px solid #f59e0b; border-radius:4px; padding:3px 8px; white-space:nowrap; cursor:help;" title="Chrome heavily throttles JavaScript timers in a backgrounded or minimized tab. Keep this tab open and focused for the whole duration of a simulation run, firmware update, or reconnect attempt - switching away can stall or corrupt them mid-way.">
+                ⚠ Keep this tab active while connected
+            </span>
             <img class="logo-img-small" src="{{LOGO_DATA_URI}}" alt="Logo">
         </div>
     </header>
@@ -229,17 +235,11 @@
                 board must be running a *Sim firmware build.
             </div>
 
-            <!-- Shown only in the browser build, where there's no native file dialog / fs access. -->
-            <div id="sim-desktop-only" style="display:none; font-size:0.8rem; color:#f59e0b; border:1px solid #f59e0b55; background:#f59e0b11; border-radius:6px; padding:8px 10px; line-height:1.45;">
-                ⚠ Simulation replay only works in the SillyGooseTool <b>desktop app</b> — this web
-                version can't access the filesystem to read a log file.
-                <a href="https://github.com/Patrick-McGuire/SillyGooseTool/releases/latest" target="_blank" style="color:#f59e0b; text-decoration:underline;">Download the desktop app</a>.
-            </div>
-
             <div class="fw-field">
                 <label class="fw-label">Log File</label>
                 <div style="display:flex; gap:8px; align-items:center; min-width:0;">
                     <button id="sim-choose-btn" class="btn btn-secondary" style="width:120px">Choose File</button>
+                    <input type="file" id="sim-file-input" accept=".txt,.csv,.log" style="display:none">
                     <span id="sim-file-name" style="font-size:0.75rem; color:#94a3b8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
                 </div>
             </div>
@@ -270,12 +270,17 @@
                 the selected build is copied over, and it restarts on the new firmware.
             </div>
 
-            <!-- Shown only in the browser build, where USB flashing isn't available. -->
-            <div id="fw-desktop-only" style="display:none; font-size:0.8rem; color:#f59e0b; border:1px solid #f59e0b55; background:#f59e0b11; border-radius:6px; padding:8px 10px; line-height:1.45;">
-                ⚠ Firmware updates only work in the SillyGooseTool <b>desktop app</b> — this web
-                version can't access USB to flash your board.
-                <a href="https://github.com/Patrick-McGuire/SillyGooseTool/releases/latest" target="_blank" style="color:#f59e0b; text-decoration:underline;">Download the desktop app</a>
-                to update firmware.
+            <!-- Shown only during a browser-build flash, once the board is in its bootloader
+                 and the firmware file is ready - there's no fs access to copy it onto the
+                 drive automatically, so the user does that step by hand. See fwDoUpdate()'s
+                 isBrowser branch in 08-firmware.js. -->
+            <div id="fw-manual-copy" style="display:none; font-size:0.8rem; color:#38bdf8; border:1px solid #38bdf855; background:#38bdf811; border-radius:6px; padding:8px 10px; line-height:1.45;">
+                Waiting for the bootloader drive to appear (shows up as a removable drive named
+                <b>FEATHERBOOT</b>). Copy <b><span id="fw-manual-copy-name"></span></b>
+                onto it — the board reboots automatically once the copy finishes.
+                <div style="margin-top:6px;">
+                    <button id="fw-manual-copy-done-btn" class="btn" style="width:190px">I copied it — Reconnect</button>
+                </div>
             </div>
 
             <div class="fw-field">
@@ -302,6 +307,7 @@
                 <label class="fw-label">Local UF2</label>
                 <div style="display:flex; gap:8px; align-items:center; min-width:0;">
                     <button id="fw-local-btn" class="btn btn-secondary" style="width:120px">Choose File</button>
+                    <input type="file" id="fw-local-file-input" accept=".uf2" style="display:none">
                     <button id="fw-local-clear-btn" class="btn btn-secondary" style="display:none; width:70px">Clear</button>
                     <span id="fw-local-name" style="font-size:0.75rem; color:#94a3b8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
                 </div>

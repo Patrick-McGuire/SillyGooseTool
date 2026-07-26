@@ -54,19 +54,19 @@
 
         /* Control Panel: every device-facing action button in one place
            (Stream/Logging/Board/Pyro groups), instead of scattered stat-cards. */
-        .control-panel { width: 240px; flex-shrink: 0; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
-        .control-groups { display: flex; flex-direction: column; gap: var(--gap-md); }
-        .control-group { display: flex; flex-direction: column; gap: 5px; }
+        .control-panel { width: 240px; flex-shrink: 0; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
+        .control-groups { display: flex; flex-direction: column; gap: var(--gap-sm); }
+        .control-group { display: flex; flex-direction: column; gap: 4px; }
         /* #pyro-fire-buttons is JS-populated (rebuildPyroFireButtons) with a
            variable number of buttons - needs the same stacking its static
            sibling groups get "for free" from .control-group's own flex-column. */
-        #pyro-fire-buttons { display: flex; flex-direction: column; gap: 5px; }
+        #pyro-fire-buttons { display: flex; flex-direction: column; gap: 4px; }
         .control-group-label { font-size: var(--fs-xs); color: #94a3b8; text-transform: uppercase; margin-bottom: 1px; }
-        .control-group .btn { height: 30px; font-size: var(--fs-sm); padding: 4px 8px; }
+        .control-group .btn { height: 26px; font-size: var(--fs-sm); padding: 3px 8px; }
         /* The log-health readout sits right under its own group's buttons (not
            off in a separate box) - a divider is enough to read as "this is what
            Health reports", rather than needing card-in-a-card styling. */
-        .control-readout-group { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--border); }
+        .control-readout-group { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; padding-top: 4px; border-top: 1px solid var(--border); }
         .control-readout { font-size: var(--fs-xs); color: #cbd5e1; }
         .control-readout span { color: white; font-weight: 600; }
 

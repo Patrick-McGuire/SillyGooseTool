@@ -101,6 +101,13 @@ document.getElementById('sendBtn').onclick = sendCmdFromInput;
 document.getElementById('connectBtn').onclick = () => ConnectionManager.getActive().connect();
 document.getElementById('disconnectBtn').onclick = () => ConnectionManager.getActive().disconnect();
 
+// Browser build only - see stay-active-note in body.html. Electron windows aren't throttled
+// like a backgrounded browser tab, so the warning would just be noise there.
+if (!window.sgFirmware) {
+    const stayActiveNote = document.getElementById('stay-active-note');
+    if (stayActiveNote) stayActiveNote.style.display = '';
+}
+
 // Exports the full DebugLog ring buffer (see 00-logger.js) as a plain-text
 // file, so a user hitting a bug can send it back rather than trying to
 // describe/reproduce what happened.

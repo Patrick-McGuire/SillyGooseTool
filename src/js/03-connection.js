@@ -488,17 +488,21 @@ function showProfileSelectModal(conn, hint) {
 // never for a normal, recognized connect (the previously-always-visible
 // Altimeter dropdown is gone; this replaces it).
 async function detectAltimeterOnConnect(conn) {
-    if (!window.sgFirmware) {
-        // Plain browser build: Web Serial never exposes the USB product
-        // descriptor string, so there's no signal to auto-detect from here.
-        showProfileSelectModal(conn, "Auto-detect isn't available in the browser build - pick which altimeter this is.");
-        return;
-    }
-    const familyId = await fwDetectVariant(conn);
+    // Desktop reads the USB iProduct string (fwDetectVariant, precise down to variant number);
+    // a plain browser only gets numeric vendor/product ids (fwDetectFamilyFromUsbIds) - still
+    // enough to tell SillyGoose from SeriousGoose, see that function's comment in 08-firmware.js.
+    const familyId = window.sgFirmware ? await fwDetectVariant(conn) : fwDetectFamilyFromUsbIds(conn);
     if (!familyId) {
-        showProfileSelectModal(conn, "Couldn't auto-detect the connected board - pick which altimeter this is.");
+        // In the browser, include the raw USB id in the hint - fwDetectFamilyFromUsbIds()'s PID
+        // table is unconfirmed against real hardware, so this is the fastest way to see what a
+        // given board actually reports and fix the table if it's wrong.
+        const idHex = !window.sgFirmware && fwUsbIdHexString(conn);
+        showProfileSelectModal(conn, idHex
+            ? `Couldn't auto-detect the connected board (USB ${idHex}) - pick which altimeter this is.`
+            : "Couldn't auto-detect the connected board - pick which altimeter this is.");
     }
     // A detected non-logging family (e.g. SeriousGooseGround) or a detected
     // logging profile both fall through here with nothing left to do -
-    // fwDetectVariant() already called setActiveProfile() in the latter case.
+    // fwDetectVariant()/fwDetectFamilyFromUsbIds() already called setActiveProfile() in the
+    // latter case.
 }

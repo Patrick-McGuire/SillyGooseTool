@@ -1,6 +1,9 @@
-// ===================== Sensor simulation replay (desktop app only) =====================
-// window.sgSimulation is exposed by electron/preload.js. In a plain browser it's undefined,
-// so the tab stays visible (like the Firmware tab) but disabled - see initSimulation().
+// ===================== Sensor simulation replay =====================
+// window.sgSimulation (electron/preload.js) reads the log via Electron's native file dialog
+// + fs, off the renderer thread. In a plain browser it's undefined, so initSimulation() falls
+// back to a hidden <input type=file> + the File API instead - see below. Either way the
+// streaming itself already runs over Web Serial, which works in both builds, so this is the
+// only piece that needed a browser-compatible path.
 //
 // Replays a recorded flight log back to the board as --sim/--simSize traffic, matching
 // scripts/SendSimDataSillyGoose.py's protocol exactly: 8 comma-separated floats per sample
@@ -231,28 +234,39 @@ function simDescribeFile(rows) {
         : `${rows.length} rows, ${durationS.toFixed(0)}s total, no launch transition detected`;
 }
 
-function initSimulation() {
-    if (!window.sgSimulation) {
-        // Browser build: no native file dialog / fs access to read a log file with. Gray the
-        // panel out and explain, same pattern as 08-firmware.js's initFirmwareDisabled().
-        const notice = document.getElementById('sim-desktop-only');
-        if (notice) notice.style.display = '';
-        document.getElementById('sim-choose-btn').disabled = true;
-        document.querySelector('#sim-tab .fw-panel').style.opacity = '0.6';
-        return;
-    }
+// Shared by both the desktop (sgSimulation.chooseFile) and browser (<input type=file>) paths.
+function simLoadFile(name, text) {
+    simLoadedRows = Simulation.parseLog(text);
+    document.getElementById('sim-file-name').textContent = name;
+    simDescribeFile(simLoadedRows);
+    document.getElementById('sim-start-btn').disabled = simLoadedRows.length === 0;
+    simStatus('');
+}
 
+function initSimulation() {
     document.getElementById('sim-choose-btn').onclick = async () => {
+        if (!window.sgSimulation) {
+            // Browser build: no native dialog, so drive the hidden <input type=file> instead.
+            document.getElementById('sim-file-input').click();
+            return;
+        }
         try {
             const file = await window.sgSimulation.chooseFile();
             if (!file) return;
-            simLoadedRows = Simulation.parseLog(file.text);
-            document.getElementById('sim-file-name').textContent = file.name;
-            simDescribeFile(simLoadedRows);
-            document.getElementById('sim-start-btn').disabled = simLoadedRows.length === 0;
-            simStatus('');
+            simLoadFile(file.name, file.text);
         } catch (e) {
             simStatus('File error: ' + e.message, '#ef4444');
+        }
+    };
+
+    document.getElementById('sim-file-input').onchange = async (e) => {
+        const file = e.target.files[0];
+        e.target.value = ''; // reset so re-choosing the same file still fires 'change'
+        if (!file) return;
+        try {
+            simLoadFile(file.name, await file.text());
+        } catch (err) {
+            simStatus('File error: ' + err.message, '#ef4444');
         }
     };
 

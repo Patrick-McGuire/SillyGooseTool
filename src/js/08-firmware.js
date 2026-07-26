@@ -1,10 +1,15 @@
-// ===================== Firmware update (desktop app only) =====================
-// window.sgFirmware is exposed by electron/preload.js. In a plain browser it is
-// undefined, so the Firmware tab stays hidden and this code never runs.
+// ===================== Firmware update =====================
+// window.sgFirmware (electron/preload.js) gives the desktop app precise USB board detection
+// and full fs access (list releases / pick a local UF2 / auto-copy onto the bootloader drive).
+// In a plain browser it's undefined; initFirmwareBrowser() below covers the same ground with
+// browser-only APIs instead - direct GitHub API fetches, a hidden <input type=file>, and (since
+// there's no way to write onto an arbitrary drive) a manual "copy this file yourself" step in
+// fwDoUpdate(). Downloading a release, the bootloader touch-reset, and reconnect were already
+// Web-Serial/fetch-based and need no browser-specific handling at all.
 
 const fwSleep = (ms) => new Promise(r => setTimeout(r, ms));
 let fwReleases = null;       // { flight: [...], notFlightTested: [...] }
-let fwLocalUf2 = null;       // { path, name } when flashing a user-selected local file
+let fwLocalUf2 = null;       // { path, name } (desktop) or { name } (browser) when flashing a user-selected local file
 let fwBusy = false;
 let fwReconnectCancel = false; // set when the user clicks Reconnect manually
 let fwAppPid = null;           // USB productId of the app firmware (captured pre-flash);
@@ -85,6 +90,64 @@ function fwSelectedAssetUrl() {
     return rel ? ((rel.assets[familyId] && rel.assets[familyId][variant]) || null) : null;
 }
 
+// Browser counterpart to electron/main.js's 'firmware:list' IPC handler - same public GitHub
+// API endpoint (CORS-enabled for anonymous GET, so this works directly from a page), same
+// release -> {flight, notFlightTested} grouping. Mirrors main.js's pickAsset()/
+// normalizeReleases() but keys off ALL_BOARD_FAMILIES (id + firmwareVariants) instead of
+// duplicating its separate BOARD_FAMILIES/prefix table - id and prefix are the same string for
+// every family today (e.g. "SeriousGoose"), so nothing is lost by reusing id here.
+const FIRMWARE_REPO = 'AerospaceNU/nuli-avionics-flight-software';
+
+function fwPickAssetBrowser(assets, familyId, variantValue) {
+    const n = (variantValue.match(/\d+/) || [])[0];
+    if (!n) return null;
+    const re = new RegExp(`^${familyId}V${n}(?!Sim)`);
+    const a = (assets || []).find((x) => re.test(x.name));
+    return a ? a.browser_download_url : null;
+}
+
+function fwNormalizeReleasesBrowser(releases) {
+    const flight = [];
+    const notFlightTested = [];
+    for (const r of releases) {
+        const tag = r.tag_name || '';
+        let channel;
+        if (tag === 'latest' || tag.startsWith('main-')) channel = flight;
+        else if (tag === 'not-flight-tested-latest') channel = notFlightTested;
+        else continue;
+
+        const assets = {};
+        let anyAsset = false;
+        for (const family of Object.values(ALL_BOARD_FAMILIES)) {
+            const familyAssets = {};
+            for (const v of family.firmwareVariants) {
+                const url = fwPickAssetBrowser(r.assets, family.id, v.value);
+                if (url) { familyAssets[v.value] = url; anyAsset = true; }
+            }
+            assets[family.id] = familyAssets;
+        }
+        if (!anyAsset) continue;
+
+        const isLatest = tag === 'latest' || tag === 'not-flight-tested-latest';
+        channel.push({
+            label: r.name || tag, tag, isLatest, prerelease: !!r.prerelease,
+            publishedAt: r.published_at || '', assets
+        });
+    }
+    const sortFn = (a, b) => (a.isLatest ? -1 : b.isLatest ? 1 : b.publishedAt.localeCompare(a.publishedAt));
+    flight.sort(sortFn);
+    notFlightTested.sort(sortFn);
+    return { flight, notFlightTested };
+}
+
+async function fwFetchReleasesBrowser() {
+    const res = await fetch(`https://api.github.com/repos/${FIRMWARE_REPO}/releases?per_page=100`, {
+        headers: { Accept: 'application/vnd.github+json' }
+    });
+    if (!res.ok) throw new Error(`GitHub API returned ${res.status}`);
+    return fwNormalizeReleasesBrowser(await res.json());
+}
+
 // Auto-detect the board family + variant (e.g. "SeriousGooseV1") from the USB
 // product descriptor of the connected board. NOT the user-writable BOARD_NAME.
 // Safe to call repeatedly (on connect / when opening the tab). Also switches the
@@ -117,6 +180,60 @@ async function fwDetectVariant(conn) {
     } catch (e) { return null; }
 }
 
+// Browser counterpart to fwDetectVariant() above. Web Serial's port.getInfo() never exposes the
+// iProduct STRING Electron reads (no "SillyGooseV2"-style descriptor in a plain browser) - but
+// it does expose the numeric USB vendor/product ID, and Adafruit's Feather M0 (SillyGoose) vs
+// Feather M4 (SeriousGoose/SeriousGooseGround) boards enumerate under different PIDs (see their
+// platformio board defs). That's enough to tell the two hardware families apart, just not exact
+// variant number, and not SeriousGoose from SeriousGooseGround (identical M4 board -> same PID
+// either way). The latter ambiguity doesn't matter for detectAltimeterOnConnect() in
+// 03-connection.js though: SeriousGooseGround never produces a flight log, so of the two
+// ALTIMETER_PROFILES choices that modal actually offers, an M4 PID unambiguously means
+// SeriousGoose.
+// NOTE (2026-07): 0x800B is confirmed (on real hardware, normal boot - not the bootloader) as a
+// SillyGoose app-mode PID, despite matching Adafruit's stock feather_m0 board def's bootloader
+// entry - this custom build's actual descriptor doesn't follow that convention. 0x000B/0x0015
+// are the unconfirmed stock-board values, kept in case some SillyGoose units do report them.
+// If detection still misses for a real board, check the raw "USB vid=.. pid=.." text this file
+// surfaces (in fw-detected and the profile-select modal's hint - see fwUsbIdHexString()) and add
+// it here.
+const FEATHER_M0_APP_PIDS = new Set([0x000B, 0x0015, 0x800B]); // SillyGoose - Feather M0 (SAMD21)
+const FEATHER_M4_APP_PIDS = new Set([0x0031, 0x0032, 0x8031]); // SeriousGoose family - Feather M4 (SAMD51)
+
+// Exposed separately from fwDetectFamilyFromUsbIds() so 03-connection.js's
+// detectAltimeterOnConnect() can include the raw ids in its own hint text too, for whichever
+// modal/label the user actually happens to see first.
+function fwUsbIdHexString(conn) {
+    if (!conn.port) return null;
+    try {
+        const info = conn.port.getInfo();
+        return `vid=0x${(info.usbVendorId || 0).toString(16)} pid=0x${(info.usbProductId || 0).toString(16)}`;
+    } catch (e) { return null; }
+}
+
+function fwDetectFamilyFromUsbIds(conn) {
+    const detEl = document.getElementById('fw-detected');
+    if (!conn.port) return null;
+    let info;
+    try { info = conn.port.getInfo(); } catch (e) { return null; }
+    let familyId = null;
+    if (info.usbVendorId === 0x239A) {
+        if (FEATHER_M0_APP_PIDS.has(info.usbProductId)) familyId = 'SillyGoose';
+        else if (FEATHER_M4_APP_PIDS.has(info.usbProductId)) familyId = 'SeriousGoose';
+    }
+    const idHex = fwUsbIdHexString(conn);
+    DebugLog.info('firmware', `USB ids: ${idHex}${familyId ? ' -> ' + familyId : ' (no family match)'}`);
+    if (!familyId) {
+        if (detEl) detEl.textContent = idHex ? `connected as USB ${idHex} — pick the board manually` : '';
+        return null;
+    }
+    document.getElementById('fw-family').value = familyId;
+    fwPopulateVariants();
+    if (detEl) detEl.textContent = `detected ${ALL_BOARD_FAMILIES[familyId].displayName} by USB id (${idHex}) — pick the exact variant manually`;
+    if (ALTIMETER_PROFILES[familyId]) conn.setActiveProfile(familyId);
+    return familyId;
+}
+
 // 1200-baud touch: reset the SAMD21/SAMD51 into its UF2 bootloader using the
 // currently-connected port, then release it. Mirrors the Arduino touch1200.
 async function fwEnterBootloaderViaTouch(conn) {
@@ -128,12 +245,26 @@ async function fwEnterBootloaderViaTouch(conn) {
     try { fwAppPid = (p.getInfo && p.getInfo().usbProductId) || null; } catch (e) { fwAppPid = null; }
     conn.keepReading = false;                                   // stop readLoop re-grabbing the reader
     if (conn.reader) { try { await conn.reader.cancel(); } catch (e) {} }
-    // Wait for readLoop's finally to release the reader lock before we close.
+    // The Simulation tab holds port.writable's writer locked for its entire run (see
+    // Simulation.run() in 10-simulation.js) - close() below silently rejects while either
+    // stream is still locked, which then made the reopen a few lines down throw "the port is
+    // already open". Ask it to stop and give it a moment to actually release before proceeding.
+    if (typeof Simulation !== 'undefined' && Simulation.running) {
+        Simulation.stop();
+        for (let i = 0; i < 100 && Simulation.running; i++) await fwSleep(50); // up to 5s
+    }
+    // Wait for readLoop's finally to release the reader lock, and any writer (Simulation or
+    // otherwise) to release the writable lock, before we close.
     for (let i = 0; i < 25 && p.readable && p.readable.locked; i++) await fwSleep(30);
+    for (let i = 0; i < 25 && p.writable && p.writable.locked; i++) await fwSleep(30);
     try { await p.close(); } catch (e) {}
     conn.forceUIDisconnect();                                   // clears conn.port + UI; `p` still valid
     await fwSleep(250);
-    await p.open({ baudRate: 1200 });                      // the touch
+    try {
+        await p.open({ baudRate: 1200 });                  // the touch
+    } catch (e) {
+        throw new Error(`Could not reset the board into its bootloader (${e.message}). Make sure nothing else (e.g. a running Simulation) is still using the port, then try again.`);
+    }
     await fwSleep(150);
     try { await p.close(); } catch (e) {}                  // close at 1200 -> board jumps to bootloader
     await fwSleep(400);
@@ -215,14 +346,18 @@ async function fwDoUpdate(conn, isRetry) {
     const variant = document.getElementById('fw-variant').value;
     const channel = document.getElementById('fw-channel').value;
     const connected = !!conn.port;
+    const isBrowser = !window.sgFirmware;
 
     if (!isRetry) {
         const how = connected
             ? 'The board will be reset into its bootloader automatically.'
             : 'Your board is not connected — you will need to double-tap the RESET button.';
         const warn = channel === 'notFlightTested' ? '\n\n⚠ This is a NOT-FLIGHT-TESTED build.' : '';
+        const manualCopyNote = isBrowser
+            ? '\n\nThis is the browser build: once the bootloader drive appears, you copy the firmware file onto it yourself.'
+            : '';
         const source = localUf2 ? `local UF2 "${localUf2.name}"` : `${family.displayName} ${variant} firmware`;
-        if (!confirm(`Flash ${source}?\n\n${how}${localUf2 ? '' : warn}`)) return;
+        if (!confirm(`Flash ${source}?\n\n${how}${manualCopyNote}${localUf2 ? '' : warn}`)) return;
     }
 
     fwBusy = true;
@@ -233,17 +368,20 @@ async function fwDoUpdate(conn, isRetry) {
     DebugLog.info('firmware', `flashing ${localUf2 ? 'local UF2 ' + localUf2.name : family.displayName + ' ' + variant + ' (' + channel + ')'}`);
     try {
         let uf2Path;
-        if (localUf2) {
-            fwProgress(null);
-            fwStatus(`Using local firmware ${localUf2.name}...`);
-            uf2Path = localUf2.path;
-        } else {
-        // 1) Download first — the board stays untouched if this fails.
-        fwStatus('Downloading firmware…');
-        uf2Path = await window.sgFirmware.download(url);
+        if (!isBrowser) {
+            if (localUf2) {
+                fwProgress(null);
+                fwStatus(`Using local firmware ${localUf2.name}...`);
+                uf2Path = localUf2.path;
+            } else {
+                // 1) Download first — the board stays untouched if this fails.
+                fwStatus('Downloading firmware…');
+                uf2Path = await window.sgFirmware.download(url);
+            }
         }
 
-        // 2) Enter the bootloader (auto touch when connected, else manual).
+        // 2) Enter the bootloader (auto touch when connected, else manual). Already
+        // Web-Serial-based, so this step is identical in the browser build.
         if (connected) {
             fwStatus('Resetting board into bootloader…');
             await fwEnterBootloaderViaTouch(conn);
@@ -251,18 +389,45 @@ async function fwDoUpdate(conn, isRetry) {
             fwStatus('Double-tap the RESET button on your board now…');
         }
 
-        // 3) Wait for FEATHERBOOT and copy the .uf2.
-        const result = await window.sgFirmware.waitAndFlash(uf2Path);
-        fwProgress(null);
-        if (!result.ok) {
-            DebugLog.error('firmware', `flash failed: ${result.reason} ${result.detail || ''}`);
-            if (result.reason === 'no-drive') {
-                fwStatus('Bootloader drive not found. Double-tap RESET on the board, then click Retry.', '#f59e0b');
-                fwShowBtn('fw-retry-btn', true);
+        if (isBrowser) {
+            // 3) No fs access here - download the release asset (a local UF2 the user already
+            // picked needs no re-download, it's already on disk) and let them copy it onto the
+            // bootloader drive themselves. See fw-manual-copy in body.html.
+            let fileName;
+            if (localUf2) {
+                fileName = localUf2.name;
             } else {
-                fwStatus('Flash failed: ' + (result.detail || result.reason), '#ef4444');
+                fileName = url.split('/').pop() || 'firmware.uf2';
+                const a = document.createElement('a');
+                a.href = url; a.download = fileName;
+                document.body.appendChild(a); a.click(); a.remove();
             }
-            return;
+            document.getElementById('fw-manual-copy-name').textContent = fileName;
+            fwShowBtn('fw-manual-copy', true);
+            fwStatus(localUf2
+                ? `Waiting for the bootloader drive — copy ${fileName} onto it once it appears.`
+                : `${fileName} downloading. Waiting for the bootloader drive — copy the file onto it once it appears.`);
+
+            await new Promise((resolve) => {
+                document.getElementById('fw-manual-copy-done-btn').onclick = () => {
+                    fwShowBtn('fw-manual-copy', false);
+                    resolve();
+                };
+            });
+        } else {
+            // 3) Wait for FEATHERBOOT and copy the .uf2.
+            const result = await window.sgFirmware.waitAndFlash(uf2Path);
+            fwProgress(null);
+            if (!result.ok) {
+                DebugLog.error('firmware', `flash failed: ${result.reason} ${result.detail || ''}`);
+                if (result.reason === 'no-drive') {
+                    fwStatus('Bootloader drive not found. Double-tap RESET on the board, then click Retry.', '#f59e0b');
+                    fwShowBtn('fw-retry-btn', true);
+                } else {
+                    fwStatus('Flash failed: ' + (result.detail || result.reason), '#ef4444');
+                }
+                return;
+            }
         }
 
         // 4) Success — board reboots on the new firmware. Offer the manual
@@ -283,20 +448,8 @@ async function fwDoUpdate(conn, isRetry) {
     } finally {
         fwBusy = false;
         document.getElementById('fw-update-btn').disabled = false;
+        fwShowBtn('fw-manual-copy', false);
     }
-}
-
-// Browser build: the Firmware tab is visible but USB flashing isn't possible
-// (no window.sgFirmware). Gray the panel out and explain it's desktop-only.
-function initFirmwareDisabled() {
-    const notice = document.getElementById('fw-desktop-only');
-    if (notice) notice.style.display = '';
-    ['fw-channel', 'fw-version', 'fw-family', 'fw-variant', 'fw-local-btn', 'fw-local-clear-btn', 'fw-update-btn'].forEach((id) => {
-        const el = document.getElementById(id);
-        if (el) el.disabled = true;
-    });
-    const panel = document.querySelector('#firmware-tab .fw-panel');
-    if (panel) panel.style.opacity = '0.6';
 }
 
 // Populates the Board dropdown from ALL_BOARD_FAMILIES and the Variant dropdown
@@ -358,13 +511,54 @@ async function initFirmware(conn) {
     }
 }
 
+// Browser build: everything above still applies (download, bootloader touch, reconnect are
+// all Web-Serial/fetch-based already) except the two desktop-only IPC calls - listing releases
+// (done directly against GitHub's API instead, see fwFetchReleasesBrowser) and picking a local
+// UF2 (done via a hidden <input type=file>, same fallback pattern as 10-simulation.js's log
+// picker). fwDoUpdate()'s own isBrowser branch handles the "no fs access" part of flashing.
+async function initFirmwareBrowser(conn) {
+    const familySel = document.getElementById('fw-family');
+    familySel.onchange = () => { fwPopulateVariants(); fwPopulateVersions(); };
+
+    document.getElementById('fw-channel').onchange = fwPopulateVersions;
+    document.getElementById('fw-local-btn').onclick = () => document.getElementById('fw-local-file-input').click();
+    document.getElementById('fw-local-file-input').onchange = (e) => {
+        const file = e.target.files[0];
+        e.target.value = ''; // reset so re-choosing the same file still fires 'change'
+        if (!file) return;
+        fwSetLocalUf2({ name: file.name });
+        fwStatus(`Selected local firmware ${file.name}.`, '#22c55e');
+    };
+    document.getElementById('fw-local-clear-btn').onclick = () => {
+        fwSetLocalUf2(null);
+        fwStatus('');
+    };
+    document.getElementById('fw-update-btn').onclick = () => fwDoUpdate(conn, false);
+    document.getElementById('fw-reconnect-btn').onclick = () => {
+        fwReconnectCancel = true;
+        fwShowBtn('fw-reconnect-btn', false);
+        conn.connect();
+    };
+    document.getElementById('fw-tab-btn').addEventListener('click', () => fwDetectFamilyFromUsbIds(conn));
+    fwDetectFamilyFromUsbIds(conn);
+
+    try {
+        fwStatus('Loading available firmware…');
+        fwReleases = await fwFetchReleasesBrowser();
+        fwPopulateVersions();
+        fwStatus('');
+    } catch (e) {
+        fwStatus('Could not load firmware list: ' + e.message, '#ef4444');
+    }
+}
+
 // Run as soon as the DOM is ready (not on 'load', which waits for the whole
 // multi-megabyte inlined bundle — Plotly, Leaflet, etc. — to finish). The tab is
-// always shown; the desktop app wires it up, the browser build grays it out.
+// always shown; only the release-listing/local-file/flash-copy steps differ by build.
 function fwInit() {
     const conn = ConnectionManager.getActive();
     fwPopulateFamilies(conn);
-    if (window.sgFirmware) initFirmware(conn); else initFirmwareDisabled();
+    if (window.sgFirmware) initFirmware(conn); else initFirmwareBrowser(conn);
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fwInit);
 else fwInit();
