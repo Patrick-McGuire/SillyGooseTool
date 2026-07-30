@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Select Bluetooth Device</title>
+<style>
+  :root {
+    --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --muted: #94a3b8;
+    --accent: #38bdf8; --border: #334155;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    display: flex; flex-direction: column; padding: 18px; gap: 14px;
+    -webkit-user-select: none; user-select: none;
+  }
+  h1 { font-size: 1.05rem; margin: 0; }
+  p.sub { margin: 0; font-size: 0.8rem; color: var(--muted); }
+  /* min-height:0 overrides a flex item's default content-based floor - the
+     same fix app.css's own .tab-content comment documents. Without it, once
+     enough devices are found (a real active scan found 40+), #list's
+     content height wins over the flex constraint and grows the whole
+     picker past this fixed, non-resizable window's bounds instead of
+     scrolling within it. */
+  #list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex: 1; min-height: 0; }
+  #empty { font-size: 0.8rem; color: var(--muted); font-style: italic; padding: 8px 2px; }
+  .device {
+    text-align: left; cursor: pointer; border: 1px solid var(--border);
+    background: var(--card); color: var(--text); border-radius: 10px;
+    padding: 12px 14px; transition: border-color .12s, background .12s;
+  }
+  .device:hover, .device:focus {
+    border-color: var(--accent); background: #243049; outline: none;
+  }
+  .device .name { font-weight: 600; font-size: 0.92rem; }
+  .device .meta { font-size: 0.72rem; color: var(--muted); margin-top: 3px; }
+  .actions { display: flex; justify-content: space-between; align-items: center; }
+  .scanning { font-size: 0.75rem; color: var(--accent); }
+  .cancel {
+    cursor: pointer; background: transparent; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 16px;
+    font-size: 0.82rem;
+  }
+  .cancel:hover { color: var(--text); border-color: var(--muted); }
+</style>
+</head>
+<body>
+  <div>
+    <h1>Select a Bluetooth device</h1>
+    <p class="sub">Scanning for nearby devices - the list updates as more are found.</p>
+  </div>
+  <div id="list"></div>
+  <div id="empty">Scanning...</div>
+  <div class="actions">
+    <span class="scanning">Scanning for devices...</span>
+    <button class="cancel" id="cancel">Cancel</button>
+  </div>
+<script>
+  const list = document.getElementById('list');
+  const empty = document.getElementById('empty');
+  document.getElementById('cancel').addEventListener('click', () => window.btPicker.cancel());
+
+  // BLE scanning is open-ended - onDevices() fires repeatedly as more devices
+  // are found, each time with the full list so far (see main.js). Rebuilding
+  // the whole list from scratch on every call (the previous approach) resets
+  // scroll position and, worse, re-focuses the first button every time
+  // (focus() scrolls its target into view by default) - so the list visibly
+  // jumped back to the top on every refresh, making it all but impossible to
+  // select anything below the fold. Fixed by only appending devices not
+  // already shown, and only auto-focusing the first button once, ever.
+  const shown = new Map(); // deviceId -> button element
+  let focusedOnce = false;
+
+  window.btPicker.onDevices((payload) => {
+    const devices = payload.devices || [];
+    for (const d of devices) {
+      const existing = shown.get(d.deviceId);
+      if (existing) {
+        const nameEl = existing.querySelector('.name');
+        if (nameEl && d.deviceName && nameEl.textContent !== d.deviceName) nameEl.textContent = d.deviceName;
+        continue;
+      }
+      const btn = document.createElement('button');
+      btn.className = 'device';
+      btn.innerHTML = '<div class="name"></div><div class="meta"></div>';
+      btn.querySelector('.name').textContent = d.deviceName || 'Unknown Device';
+      btn.querySelector('.meta').textContent = d.deviceId || '';
+      btn.addEventListener('click', () => window.btPicker.choose(d.deviceId));
+      list.appendChild(btn);
+      shown.set(d.deviceId, btn);
+    }
+    empty.style.display = shown.size ? 'none' : 'block';
+    if (!focusedOnce && shown.size) {
+      focusedOnce = true;
+      const firstBtn = list.querySelector('.device');
+      if (firstBtn) setTimeout(() => firstBtn.focus({ preventScroll: true }), 0);
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') window.btPicker.cancel();
+  });
+</script>
+</body>
+</html>

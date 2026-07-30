@@ -39,3 +39,9 @@ contextBridge.exposeInMainWorld('sgSimulation', {
   // Pick a log file to replay; returns { path, name, text } or null if canceled.
   chooseFile: () => ipcRenderer.invoke('simulation:choose-file')
 });
+
+// Desktop-only workaround for a reported rendering glitch (see the handler's
+// comment in main.js) - the renderer feature-detects `window.sgWindow`.
+contextBridge.exposeInMainWorld('sgWindow', {
+  nudgeRepaint: () => ipcRenderer.invoke('window:nudge-repaint')
+});

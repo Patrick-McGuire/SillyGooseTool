@@ -113,6 +113,89 @@ function pickPortWithModal(parentWindow, candidates, fallback) {
   });
 }
 
+// Styled Bluetooth device chooser (mirrors pickPortWithModal above). Unlike
+// serial ports, BLE scanning is open-ended - 'select-bluetooth-device' fires
+// repeatedly as new devices are discovered, so this state persists across
+// calls instead of resolving once: the first call creates the picker window
+// and stores it in `activeBlePicker`; later calls (from the same in-flight
+// scan) just push the growing device list into the already-open window and
+// refresh the stored callback, since Electron hands a fresh callback each
+// time and the most recent one is the live one to invoke.
+let activeBlePicker = null; // { picker, latestCallback } | null
+
+function handleSelectBluetoothDevice(parentWindow) {
+  return (event, deviceList, callback) => {
+    event.preventDefault();
+    const devices = (deviceList || []).map((d) => ({ deviceId: d.deviceId, deviceName: d.deviceName }));
+
+    if (activeBlePicker) {
+      activeBlePicker.latestCallback = callback;
+      activeBlePicker.pendingDevices = devices;
+      if (activeBlePicker.picker && !activeBlePicker.picker.isDestroyed()) {
+        activeBlePicker.picker.webContents.send('bt-picker:devices', { devices });
+      }
+      return;
+    }
+
+    // Claim the slot synchronously, before creating the BrowserWindow (a
+    // reported "multiple picker windows from one click" bug traced back to
+    // this): native BrowserWindow construction on Windows can pump the OS
+    // message loop, and a discovered-device event landing during that pump
+    // would otherwise still see activeBlePicker as null and spawn a second
+    // picker for what is really the same scan.
+    activeBlePicker = { picker: null, latestCallback: callback, pendingDevices: devices };
+
+    const picker = new BrowserWindow({
+      parent: parentWindow,
+      modal: true,
+      frame: false,
+      resizable: false,
+      width: 460,
+      height: 420,
+      backgroundColor: '#0f172a',
+      webPreferences: {
+        preload: path.join(__dirname, 'bluetooth-picker-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false
+      }
+    });
+    activeBlePicker.picker = picker;
+
+    let settled = false;
+    const finish = (deviceId) => {
+      if (settled) return;
+      settled = true;
+      ipcMain.removeListener('bt-picker:choose', onChoose);
+      ipcMain.removeListener('bt-picker:cancel', onCancel);
+      if (!picker.isDestroyed()) picker.close();
+      const cb = (activeBlePicker && activeBlePicker.latestCallback) || callback;
+      activeBlePicker = null;
+      cb(deviceId || '');
+      // A modal child window closing has been observed (reported: the main
+      // window's rendered content shrinking to roughly half its real width,
+      // leaving raw background in the rest) to leave the parent's renderer
+      // out of sync with its actual OS window bounds on Windows. Setting
+      // bounds to their own current value is a no-op sizewise but forces
+      // Chromium to re-query and re-layout against the real bounds instead
+      // of whatever stale size it had while the modal was up.
+      if (!parentWindow.isDestroyed()) {
+        parentWindow.setBounds(parentWindow.getBounds());
+      }
+    };
+    const onChoose = (_event, deviceId) => finish(deviceId);
+    const onCancel = () => finish('');
+
+    ipcMain.on('bt-picker:choose', onChoose);
+    ipcMain.on('bt-picker:cancel', onCancel);
+    picker.on('closed', () => finish(''));
+
+    picker.webContents.once('did-finish-load', () => {
+      picker.webContents.send('bt-picker:devices', { devices: activeBlePicker.pendingDevices || devices });
+    });
+    picker.loadFile(path.join(__dirname, 'bluetooth-picker.html'));
+  };
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -177,9 +260,33 @@ function createWindow() {
     callback(chosen || '');
   });
 
-  // Permissions required for the Web Serial API to work.
-  win.webContents.session.setPermissionCheckHandler((_webContents, permission) => permission === 'serial');
-  win.webContents.session.setDevicePermissionHandler((details) => details.deviceType === 'serial');
+  // Intercept the native Bluetooth chooser the same way as serial above.
+  // Note this is a webContents event, not a session event (unlike
+  // 'select-serial-port') - that's an Electron API asymmetry, not a mistake.
+  win.webContents.on('select-bluetooth-device', handleSelectBluetoothDevice(win));
+
+  // Our BLE module (Ebyte E104-BT5005A, see ars_platformio's SerialDebug.cpp)
+  // doesn't require OS-level pairing, but Electron requires *some* handler to
+  // be registered or a pairing request would otherwise hang with no prompt
+  // ever shown. Auto-accept without a PIN if one isn't requested; if a PIN
+  // ever is requested, there's nowhere to surface a prompt for it, so cancel
+  // pairing rather than hang forever.
+  win.webContents.session.setBluetoothPairingHandler((details, callback) => {
+    if (details.pairingKind === 'confirm') {
+      callback({ confirmed: true });
+    } else {
+      console.log('Unhandled Bluetooth pairing request:', JSON.stringify(details));
+      callback({ confirmed: false });
+    }
+  });
+
+  // Permissions required for the Web Serial/Bluetooth APIs to work.
+  win.webContents.session.setPermissionCheckHandler(
+    (_webContents, permission) => permission === 'serial' || permission === 'bluetooth'
+  );
+  win.webContents.session.setDevicePermissionHandler(
+    (details) => details.deviceType === 'serial' || details.deviceType === 'bluetooth'
+  );
 
   win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 
@@ -353,6 +460,20 @@ function findUf2Drives() {
     resolve(found);
   });
 }
+
+// Reported bug: after a Bluetooth picker closes (also seen after Disconnect,
+// so it's not specific to the picker window itself) the main window's
+// rendered content shrinks to roughly half its real width, leaving raw
+// background in the rest -- a Chromium GPU-compositor repaint glitch rather
+// than a CSS/layout bug (nothing in this app's CSS changes based on window
+// size). Setting a window's bounds to its own current value is a no-op
+// sizewise but forces a full repaint against the real bounds. Exposed to the
+// renderer so it can call this after any UI update heavy enough to have
+// triggered the glitch (see sgWindow.nudgeRepaint in preload.js).
+ipcMain.handle('window:nudge-repaint', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win && !win.isDestroyed()) win.setBounds(win.getBounds());
+});
 
 ipcMain.handle('firmware:board-info', () => ({ displayName: lastBoardDisplayName }));
 

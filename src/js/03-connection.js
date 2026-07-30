@@ -40,6 +40,13 @@ class BleReader {
             this._waiting = null;
             resolve({ value: undefined, done: true });
         }
+        // Real ReadableStreamDefaultReader.cancel() returns a Promise; this
+        // adapter needs to match that contract, not just resolve internally -
+        // disconnect() calls `.catch()` directly on the return value, which
+        // threw (aborting disconnect entirely, before ever reaching the
+        // actual gatt.disconnect() call below it) when this returned
+        // undefined instead.
+        return Promise.resolve();
     }
     releaseLock() {}
 }
@@ -163,6 +170,13 @@ class Connection {
     }
 
     async connect() {
+        // Neither button gets disabled while a connect attempt is in flight
+        // otherwise -- clicking "Connect via Bluetooth" again while a scan/
+        // picker from an earlier click is still open starts a second,
+        // overlapping navigator.bluetooth.requestDevice() call feeding the
+        // same shared picker-window state in main.js, which is exactly what
+        // produced the reported repeated picker open/close loop.
+        setConnectButtonsDisabled(true);
         try {
             // In the desktop app the Electron main process applies the full
             // board-aware picker (incl. listing all ports as a fallback), so
@@ -198,23 +212,29 @@ class Connection {
         } catch (e) {
             DebugLog.error('connection', 'connect failed: ' + e.message);
             logTerm("Connection Error: " + e.message, "red");
+        } finally {
+            // Unconditional, not just on failure: on success setConnectedUI(true)
+            // hides these buttons, but they must already be re-enabled by the time
+            // a later disconnect makes them visible again -- otherwise they stay
+            // disabled forever (hidden, so unnoticed) and reconnecting is impossible.
+            setConnectButtonsDisabled(false);
         }
     }
 
     async connectBluetooth() {
-        if (!bluetoothAvailable()) {
-            logTerm(navigator.userAgent.toLowerCase().includes('electron')
-                ? "Bluetooth isn't supported in the desktop app yet - use the browser version."
-                : "Web Bluetooth is not available in this browser.", "red");
+        if (!navigator.bluetooth) {
+            logTerm("Web Bluetooth is not available in this browser.", "red");
             return;
         }
+        setConnectButtonsDisabled(true);
+        let device;
         try {
             // acceptAllDevices (rather than a services/name filter) is what's
             // been validated against a real BLE UART-bridge module in the
             // sibling "ars" tool -- Chrome's filter matching wasn't reliable
             // against that module's advertising data, so the user picks the
             // right device by name from the full list instead.
-            const device = await navigator.bluetooth.requestDevice({
+            device = await navigator.bluetooth.requestDevice({
                 acceptAllDevices: true,
                 optionalServices: [BLE_SERVICE_UUID],
             });
@@ -247,6 +267,16 @@ class Connection {
         } catch (e) {
             DebugLog.error('connection', 'bluetooth connect failed: ' + e.message);
             logTerm("Bluetooth Connection Error: " + e.message, "red");
+            // If gatt.connect() succeeded but a later setup step (service/characteristic
+            // discovery, startNotifications()) threw, this.bleDevice never got set --
+            // without this, the device stays connected at the OS/Bluetooth level with
+            // nothing in the UI able to see or disconnect it.
+            if (device && device.gatt && device.gatt.connected) {
+                try { device.gatt.disconnect(); } catch (_) {}
+            }
+        } finally {
+            // Unconditional -- see the comment in connect()'s finally block above.
+            setConnectButtonsDisabled(false);
         }
     }
 
@@ -261,7 +291,17 @@ class Connection {
 
     async disconnect() {
         this.keepReading = false;
-        if (this.reader) { await this.reader.cancel().catch(() => {}); this.reader = null; }
+        // try/catch (not .catch() chained onto the call) so this can't ever
+        // throw regardless of what this.reader.cancel() returns -- a plain
+        // try/catch around `await x` is safe even if x isn't a promise at
+        // all (await on a non-promise just resolves immediately), whereas
+        // `x.catch()` throws outright if x is undefined. This exact gap
+        // previously aborted disconnect() before it ever reached the real
+        // gatt.disconnect() call below, for any BLE session.
+        if (this.reader) {
+            try { await this.reader.cancel(); } catch (_) {}
+            this.reader = null;
+        }
         if (this.transport === 'bluetooth') {
             if (this.bleDevice) {
                 try { this.bleDevice.removeEventListener('gattserverdisconnected', this._onBleDisconnected); } catch (_) {}
@@ -552,20 +592,24 @@ class Connection {
 // Connection.connect, Connection.forceUIDisconnect, and firmware.js's
 // fwAdoptPort (post-flash auto-reconnect) - all flip the same three things,
 // so they share this instead of repeating it.
-// Electron's main process intercepts 'select-serial-port' to drive its own
-// picker (see main.js), but nothing here handles 'select-bluetooth-device' -
-// without that, navigator.bluetooth.requestDevice() in an Electron window
-// just hangs forever with no picker ever shown. Hide the button there rather
-// than leave it silently broken.
-function bluetoothAvailable() {
-    return !!navigator.bluetooth && !navigator.userAgent.toLowerCase().includes('electron');
-}
-
 function setConnectedUI(connected) {
     document.getElementById('connectBtn').style.display = connected ? 'none' : (navigator.serial ? 'block' : 'none');
-    document.getElementById('connectBluetoothBtn').style.display = connected ? 'none' : (bluetoothAvailable() ? 'block' : 'none');
+    document.getElementById('connectBluetoothBtn').style.display = connected ? 'none' : (navigator.bluetooth ? 'block' : 'none');
     document.getElementById('disconnectBtn').style.display = connected ? 'block' : 'none';
     setSerialEnabled(connected);
+    // Desktop-only workaround for a reported rendering glitch (main window
+    // content shrinking to roughly half its width after connect/disconnect) -
+    // window.sgWindow only exists in the Electron build (see preload.js), so
+    // this is a no-op in the plain browser build.
+    if (window.sgWindow) window.sgWindow.nudgeRepaint();
+}
+
+// Guards against a second, overlapping connect attempt while one is already
+// in flight (mid-scan/picker-open) -- see the comment in Connection.connect().
+// setConnectedUI() only toggles display, not disabled, so this is separate.
+function setConnectButtonsDisabled(disabled) {
+    document.getElementById('connectBtn').disabled = disabled;
+    document.getElementById('connectBluetoothBtn').disabled = disabled;
 }
 
 // Returns the profile a saved flight was captured under (stamped by
