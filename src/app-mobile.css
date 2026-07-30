@@ -304,3 +304,9 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; align-i
 }
 .hover-item { display: flex; gap: 5px; color: #94a3b8; }
 .hover-val { color: var(--accent); font-weight: bold; }
+/* Full-width bar, not a small corner link like the desktop build - a tiny
+   tap target here would be easy to miss or mis-hit over live content. */
+.site-switch {
+    text-align: center; padding: 12px; font-size: 13px;
+}
+.site-switch a { color: #94a3b8; text-decoration: underline; display: inline-block; padding: 8px; }

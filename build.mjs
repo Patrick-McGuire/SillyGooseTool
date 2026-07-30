@@ -106,6 +106,36 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
 // embedded libraries below aren't read/inlined twice for two builds that
 // only actually differ in one <style> block.
 function assembleHtml(css, variantNote) {
+  const isMobile = variantNote === 'mobile';
+  // Phones landing on the plain deployed URL previously got the desktop
+  // layout (nothing redirected them to mobile/) - redirect on load unless
+  // the visitor explicitly opted back into desktop via the link below,
+  // remembered per-browser. Guarded to http(s) only so this never fires
+  // inside the Electron app, which loads this same desktop build via
+  // loadFile() (file:// protocol) and must never redirect itself.
+  const redirectScript = isMobile ? '' : `<script>
+(function () {
+  if (location.protocol.indexOf('http') !== 0) return;
+  if (localStorage.getItem('sgForceDesktop') === '1') return;
+  if (/Mobi|iPhone|iPod/i.test(navigator.userAgent)) location.replace('mobile/');
+})();
+</script>`;
+  const siteSwitch = isMobile
+    ? `<div class="site-switch"><a href="../" id="desktopSiteLink">Desktop site</a></div>
+<script>
+document.getElementById('desktopSiteLink').addEventListener('click', function (e) {
+  e.preventDefault();
+  localStorage.setItem('sgForceDesktop', '1');
+  location.href = '../';
+});
+</script>`
+    // Only meaningful for the deployed website - hidden inside Electron
+    // (file:// protocol), which has no real "mobile site" to switch to.
+    : `<div class="site-switch"><a href="mobile/" id="mobileSiteLink">Mobile site</a></div>
+<script>
+if (location.protocol.indexOf('http') !== 0) document.getElementById('mobileSiteLink').style.display = 'none';
+</script>`;
+
   return `<!DOCTYPE html>
 <!--
   SillyGoose Configuration Tool - standalone single-file build (${variantNote}).
@@ -121,6 +151,7 @@ function assembleHtml(css, variantNote) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SillyGoose Configuration Tool</title>
 ${pwaHead}
+${redirectScript}
 <style>
 ${leafletCss}
 </style>
@@ -130,6 +161,7 @@ ${css}
 </head>
 <body>
 ${bodyHtml}
+${siteSwitch}
 <script>
 /*! plotly.js v2.27.0 - MIT - https://github.com/plotly/plotly.js */
 ${plotlyJs}
