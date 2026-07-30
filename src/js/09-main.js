@@ -99,7 +99,26 @@ cmdInput.onkeydown = e => {
 document.getElementById('sendBtn').onclick = sendCmdFromInput;
 
 document.getElementById('connectBtn').onclick = () => ConnectionManager.getActive().connect();
+document.getElementById('connectBluetoothBtn').onclick = () => ConnectionManager.getActive().connectBluetooth();
 document.getElementById('disconnectBtn').onclick = () => ConnectionManager.getActive().disconnect();
+
+// Hides whichever of Connect/Connect via Bluetooth its API doesn't support.
+// Browser extensions that polyfill navigator.bluetooth (e.g. beacio on iOS
+// Safari) can inject it slightly after this script runs, so recheck for a
+// few seconds instead of locking in a possibly-stale verdict from one read.
+(function () {
+    let checks = 0;
+    const timer = setInterval(() => {
+        // Checked via the DOM (not ConnectionManager.getActive(), which lazily
+        // creates a Connection as a side effect) so this can't stomp on a
+        // connection that succeeds partway through the recheck window.
+        if (document.getElementById('disconnectBtn').style.display !== 'block') {
+            setConnectedUI(false);
+        }
+        if (++checks >= 15) clearInterval(timer);
+    }, 200);
+    setConnectedUI(false);
+})();
 
 // Browser build only - see stay-active-note in body.html. Electron windows aren't throttled
 // like a backgrounded browser tab, so the warning would just be noise there.

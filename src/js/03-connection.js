@@ -1,3 +1,80 @@
+// --- Bluetooth (BLE) transport -----------------------------------------
+// Alternate transport alongside Web Serial (mirrors the same setup in the
+// sibling "ars" tool's app.js) for a board wired to a BLE UART-bridge module
+// (Ebyte E104-BT5005A in ars's case). One GATT service with two
+// characteristics: FFF1 notifies device -> browser, FFF2 is written
+// browser -> device. Swap these constants if a different board/module pairs
+// with a different profile.
+const BLE_SERVICE_UUID = '0000fff0-0000-1000-8000-00805f9b34fb';
+const BLE_NOTIFY_UUID = '0000fff1-0000-1000-8000-00805f9b34fb';
+const BLE_WRITE_UUID = '0000fff2-0000-1000-8000-00805f9b34fb';
+const BLE_WRITE_CHUNK_SIZE = 20;
+
+// Adapts a BLE notify characteristic to the ReadableStreamDefaultReader
+// shape ({read, cancel, releaseLock}) so Connection.readLoop() doesn't need
+// to know which transport it's reading from.
+class BleReader {
+    constructor() {
+        this._queue = [];
+        this._waiting = null;
+        this._closed = false;
+    }
+    push(chunk) {
+        if (this._waiting) {
+            const resolve = this._waiting;
+            this._waiting = null;
+            resolve({ value: chunk, done: false });
+        } else {
+            this._queue.push(chunk);
+        }
+    }
+    read() {
+        if (this._queue.length) return Promise.resolve({ value: this._queue.shift(), done: false });
+        if (this._closed) return Promise.resolve({ value: undefined, done: true });
+        return new Promise((resolve) => { this._waiting = resolve; });
+    }
+    cancel() {
+        this._closed = true;
+        if (this._waiting) {
+            const resolve = this._waiting;
+            this._waiting = null;
+            resolve({ value: undefined, done: true });
+        }
+    }
+    releaseLock() {}
+}
+
+// Adapts a BLE write characteristic to a {write(data)} shape used by
+// Connection.sendCmd(). Chunked to BLE_WRITE_CHUNK_SIZE since a single GATT
+// write is limited to the negotiated ATT MTU, and serialized through a
+// promise chain since Web Bluetooth allows only one in-flight GATT
+// operation per device at a time.
+class BleWriter {
+    constructor(characteristic) {
+        this._char = characteristic;
+        this._chain = Promise.resolve();
+    }
+    write(data) {
+        const run = () => this._writeChunks(data);
+        this._chain = this._chain.then(run, run);
+        return this._chain;
+    }
+    async _writeChunks(data) {
+        // writeValueWithoutResponse() exists on every characteristic per spec
+        // regardless of whether the peripheral actually supports it - the
+        // real answer is the characteristic's declared properties.
+        const preferWithoutResponse = !!(this._char.properties && this._char.properties.writeWithoutResponse);
+        for (let offset = 0; offset < data.length; offset += BLE_WRITE_CHUNK_SIZE) {
+            const chunk = data.slice(offset, offset + BLE_WRITE_CHUNK_SIZE);
+            if (preferWithoutResponse) {
+                await this._char.writeValueWithoutResponse(chunk);
+            } else {
+                await this._char.writeValue(chunk);
+            }
+        }
+    }
+}
+
 // --- Connection -------------------------------------------------------------
 // Everything about one serial link to a board: the Web Serial port/reader,
 // the binary/text parser state machine, the active altimeter profile, and the
@@ -14,6 +91,15 @@ class Connection {
         this.port = null;
         this.reader = null;
         this.keepReading = true;
+
+        // Bluetooth transport state (see BleReader/BleWriter above) -- null
+        // unless connectBluetooth() is the active connection path.
+        this.transport = null; // 'usb' | 'bluetooth' | null
+        this.bleDevice = null;
+        this.bleWriter = null;
+        // Bound once so add/removeEventListener('gattserverdisconnected', ...)
+        // can match the same reference across reconnects on the same device.
+        this._onBleDisconnected = () => this.handleBleDisconnected();
 
         this.profile = ALTIMETER_PROFILES.SillyGoose;
         this.header = this.profile.header;
@@ -104,6 +190,7 @@ class Connection {
             // USB TX buffer backs up.
             await this.port.open({ baudRate: 115200, bufferSize: 16384 });
             DebugLog.info('connection', 'port opened');
+            this.transport = 'usb';
             setConnectedUI(true);
             this.keepReading = true;
             this.readLoop();
@@ -114,21 +201,87 @@ class Connection {
         }
     }
 
+    async connectBluetooth() {
+        if (!bluetoothAvailable()) {
+            logTerm(navigator.userAgent.toLowerCase().includes('electron')
+                ? "Bluetooth isn't supported in the desktop app yet - use the browser version."
+                : "Web Bluetooth is not available in this browser.", "red");
+            return;
+        }
+        try {
+            // acceptAllDevices (rather than a services/name filter) is what's
+            // been validated against a real BLE UART-bridge module in the
+            // sibling "ars" tool -- Chrome's filter matching wasn't reliable
+            // against that module's advertising data, so the user picks the
+            // right device by name from the full list instead.
+            const device = await navigator.bluetooth.requestDevice({
+                acceptAllDevices: true,
+                optionalServices: [BLE_SERVICE_UUID],
+            });
+            const server = await device.gatt.connect();
+            const service = await server.getPrimaryService(BLE_SERVICE_UUID);
+            const notifyChar = await service.getCharacteristic(BLE_NOTIFY_UUID);
+            const writeChar = await service.getCharacteristic(BLE_WRITE_UUID);
+
+            const bleReader = new BleReader();
+            notifyChar.addEventListener('characteristicvaluechanged', (e) => {
+                const v = e.target.value;
+                bleReader.push(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+            });
+            await notifyChar.startNotifications();
+
+            // Reused on reconnect (same device object) -- avoid stacking listeners.
+            device.removeEventListener('gattserverdisconnected', this._onBleDisconnected);
+            device.addEventListener('gattserverdisconnected', this._onBleDisconnected);
+
+            this.port = null;
+            this.bleDevice = device;
+            this.reader = bleReader;
+            this.bleWriter = new BleWriter(writeChar);
+            this.transport = 'bluetooth';
+            DebugLog.info('connection', 'bluetooth connected: ' + (device.name || device.id));
+            setConnectedUI(true);
+            this.keepReading = true;
+            this.readLoop();
+            await detectAltimeterOnConnect(this);
+        } catch (e) {
+            DebugLog.error('connection', 'bluetooth connect failed: ' + e.message);
+            logTerm("Bluetooth Connection Error: " + e.message, "red");
+        }
+    }
+
+    // 'gattserverdisconnected' listener -- the Bluetooth analog of the read
+    // loop's catch block below (device out of range, powered off, etc.).
+    handleBleDisconnected() {
+        this.keepReading = false;
+        if (this.reader) { this.reader.cancel(); }
+        DebugLog.info('connection', 'bluetooth disconnected');
+        this.forceUIDisconnect();
+    }
+
     async disconnect() {
         this.keepReading = false;
         if (this.reader) { await this.reader.cancel().catch(() => {}); this.reader = null; }
-        // Best-effort, same as the reader.cancel() above: a port that's already
-        // gone (device unplugged, crashed mid-offload) rejects close() - without
-        // catching that, this throw would skip forceUIDisconnect() entirely,
-        // leaving the UI stuck showing "connected" to a dead port with no way
-        // to recover short of reloading the app.
-        if (this.port) { await this.port.close().catch(() => {}); this.port = null; }
+        if (this.transport === 'bluetooth') {
+            if (this.bleDevice) {
+                try { this.bleDevice.removeEventListener('gattserverdisconnected', this._onBleDisconnected); } catch (_) {}
+                try { if (this.bleDevice.gatt.connected) this.bleDevice.gatt.disconnect(); } catch (_) {}
+            }
+        } else if (this.port) {
+            // Best-effort, same as the reader.cancel() above: a port that's already
+            // gone (device unplugged, crashed mid-offload) rejects close() - without
+            // catching that, this throw would skip forceUIDisconnect() entirely,
+            // leaving the UI stuck showing "connected" to a dead port with no way
+            // to recover short of reloading the app.
+            await this.port.close().catch(() => {});
+        }
         DebugLog.info('connection', 'disconnected');
         this.forceUIDisconnect();
     }
 
     forceUIDisconnect() {
-        this.port = null; setBusy(false); this.recording = false; this.streaming = false;
+        this.port = null; this.reader = null; this.bleWriter = null; this.bleDevice = null; this.transport = null;
+        setBusy(false); this.recording = false; this.streaming = false;
         setConnectedUI(false);
         // 'offloadProgress' is only otherwise cleared by a clean "Ending Offload"
         // line (see processLine below) - a disconnect mid-offload (failed/hung
@@ -140,11 +293,18 @@ class Connection {
     async sendCmd(msg) {
         // The Simulation tab holds its own writer on this same stream for the whole run - a
         // second concurrent writer would throw. See Simulation.run() in 10-simulation.js.
-        if (!this.port || !this.port.writable || this.simActive) return;
-        setBusy(true);
-        const writer = this.port.writable.getWriter();
-        await writer.write(new TextEncoder().encode(msg + "\n"));
-        writer.releaseLock();
+        if (this.simActive) return;
+        if (this.transport === 'bluetooth') {
+            if (!this.bleWriter) return;
+            setBusy(true);
+            await this.bleWriter.write(new TextEncoder().encode(msg + "\n"));
+        } else {
+            if (!this.port || !this.port.writable) return;
+            setBusy(true);
+            const writer = this.port.writable.getWriter();
+            await writer.write(new TextEncoder().encode(msg + "\n"));
+            writer.releaseLock();
+        }
         DebugLog.tx('serial', msg);
         logTerm(`>> ${msg}`, "#38bdf8");
         if (!msg.includes("offload") && !msg.includes("erase") && !msg.includes("streamLog")) setTimeout(() => setBusy(false), 800);
@@ -283,8 +443,12 @@ class Connection {
     }
 
     async readLoop() {
-        while (this.port && this.port.readable && this.keepReading) {
-            this.reader = this.port.readable.getReader();
+        // Bluetooth's this.reader (a BleReader) is created once by
+        // connectBluetooth() and reused as-is -- unlike a Web Serial
+        // ReadableStream's reader, it isn't re-acquired from a `readable`
+        // property each outer iteration.
+        while (this.keepReading && (this.transport === 'bluetooth' ? this.reader : (this.port && this.port.readable))) {
+            if (this.transport !== 'bluetooth') this.reader = this.port.readable.getReader();
             let buf = new Uint8Array(0);
             let mode = 'text'; // 'text' | 'preamble' | 'records' | 'skip'
             let recordSize = 0;
@@ -378,7 +542,7 @@ class Connection {
                 DebugLog.error('connection', 'read loop error: ' + e.message);
                 this.forceUIDisconnect();
                 break;
-            } finally { if (this.reader) { this.reader.releaseLock(); this.reader = null; } }
+            } finally { if (this.reader && this.transport !== 'bluetooth') { this.reader.releaseLock(); this.reader = null; } }
         }
     }
 }
@@ -388,8 +552,18 @@ class Connection {
 // Connection.connect, Connection.forceUIDisconnect, and firmware.js's
 // fwAdoptPort (post-flash auto-reconnect) - all flip the same three things,
 // so they share this instead of repeating it.
+// Electron's main process intercepts 'select-serial-port' to drive its own
+// picker (see main.js), but nothing here handles 'select-bluetooth-device' -
+// without that, navigator.bluetooth.requestDevice() in an Electron window
+// just hangs forever with no picker ever shown. Hide the button there rather
+// than leave it silently broken.
+function bluetoothAvailable() {
+    return !!navigator.bluetooth && !navigator.userAgent.toLowerCase().includes('electron');
+}
+
 function setConnectedUI(connected) {
-    document.getElementById('connectBtn').style.display = connected ? 'none' : 'block';
+    document.getElementById('connectBtn').style.display = connected ? 'none' : (navigator.serial ? 'block' : 'none');
+    document.getElementById('connectBluetoothBtn').style.display = connected ? 'none' : (bluetoothAvailable() ? 'block' : 'none');
     document.getElementById('disconnectBtn').style.display = connected ? 'block' : 'none';
     setSerialEnabled(connected);
 }
