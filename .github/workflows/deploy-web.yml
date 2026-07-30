@@ -40,8 +40,9 @@ jobs:
 
       - name: Copy build into sillygoose/
         run: |
-          mkdir -p pages/sillygoose
+          mkdir -p pages/sillygoose pages/sillygoose/mobile
           cp dist/index.html pages/sillygoose/index.html
+          cp dist/mobile.html pages/sillygoose/mobile/index.html
           cp dist/manifest.webmanifest pages/sillygoose/manifest.webmanifest
           cp dist/service-worker.js pages/sillygoose/service-worker.js
 

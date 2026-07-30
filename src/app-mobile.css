@@ -1,0 +1,306 @@
+/* Mobile build: same body.html/js/*.js as desktop (same element IDs drive
+   both), just a single-column, touch-friendly layout instead of desktop's
+   fixed-width sidebars/6-column stat grids. Keep in sync with app.css's
+   non-layout rules (colors, badges, modals, dials, etc.) when those change --
+   this file only overrides what actually needed to change for a phone
+   screen; everything else below is copied through unchanged. */
+:root {
+    --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc;
+    --accent: #38bdf8; --success: #22c55e; --danger: #ef4444;
+    --border: #334155;
+    --fs-xs: 0.65rem; --fs-sm: 0.75rem; --fs-md: 0.85rem;
+    --gap-sm: 6px; --gap-md: 10px;
+}
+/* Desktop's app.css has no box-sizing reset (content-box default throughout),
+   which is fine there since nothing combines width:100%/a fixed width with
+   padding on the same element. This mobile layout does (e.g. .control-panel:
+   width:100% + padding:8px 10px), where content-box adds the padding on top
+   of the 100% instead of inside it - a real, confirmed page-overflow bug
+   (getBoundingClientRect showed .control-panel rendering 20px wider than its
+   container). border-box (like the sibling "ars" tool already uses
+   everywhere) is the standard fix and safe here since every layout rule in
+   this file is already written/verified against it. */
+* { box-sizing: border-box; }
+/* Desktop locks body to 100vh/overflow:hidden and relies on #main-content
+   (overflow-y:auto) plus .tab-content{flex-grow:1;min-height:0} to fit
+   everything into exactly one screen's height with one internal scroll
+   region. That model is fragile even on desktop (the whole point of
+   min-height:0 there is working around one instance of it, per that rule's
+   own comment in app.css) - it depends on content roughly fitting the
+   window. On a phone viewport, stacking every sidebar/panel into a single
+   column makes each tab far taller than the screen, and this file already
+   confirmed (via getBoundingClientRect, not just a screenshot glitch) that
+   forcing flex-grow on overflowing content here makes it visually overlap
+   the terminal/command row below it. Simplest correct fix: don't fight it -
+   let the whole page flow and scroll normally instead of nesting a second
+   scroll region inside a height-locked shell. */
+html, body { height: auto; }
+body {
+    font-family: 'Inter', sans-serif; background-color: var(--bg-color);
+    color: var(--text-main); margin: 0; display: flex; flex-direction: column;
+}
+#main-content { display: flex; flex-direction: column; padding: 10px; gap: 6px; min-width: 0; }
+
+header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; gap: 8px; min-width: 0; }
+.header-right { display: flex; align-items: center; gap: 10px; }
+.logo-img-small { height: 28px; width: auto; border-radius: 6px; object-fit: contain; }
+/* Browser-throttle warning is genuinely desktop-tab-only advice (see
+   app.css's comment on this element) but doubly so on mobile, where there's
+   no hovering to read a title tooltip anyway - drop it rather than show
+   useless chrome. */
+#stay-active-note { display: none !important; }
+
+.loader {
+    width: 20px; height: 20px; border: 3px solid var(--border);
+    border-bottom-color: var(--accent); border-radius: 50%;
+    display: none; animation: rotation 1s linear infinite;
+}
+@keyframes rotation { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+/* Tab bar: 6 tabs + 2-3 connect buttons can't all fit on a phone width no
+   matter how they're styled - horizontal scroll (a standard, well-understood
+   mobile pattern) keeps every tab reachable without a redesign of the nav
+   itself or losing any of them. */
+.tabs { display: flex; gap: 8px; overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; padding-bottom: 2px; min-width: 0; width: 100%; }
+.tab-btn {
+    padding: 10px 16px; border: none; background: none; color: #94a3b8;
+    cursor: pointer; font-weight: 600; border-bottom: 2px solid transparent;
+    white-space: nowrap; flex-shrink: 0;
+}
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-content { display: none; flex-direction: column; gap: 10px; min-width: 0; }
+.tab-content.active { display: flex; }
+
+.section-label { font-size: var(--fs-sm); color: #94a3b8; text-transform: uppercase; letter-spacing: 0.02em; }
+
+/* System Configuration: sidebar-beside-content becomes stacked-below on
+   mobile. min-height:0 dropped along with the side-by-side assumption it
+   existed for (each region now just takes its own natural stacked height). */
+.config-layout { display: flex; flex-direction: column; gap: 12px; }
+.config-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+.control-panel { width: 100%; background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* Stream/Board/Pyro/Logging groups side by side on mobile (wrapping into
+   rows) instead of one long vertical stack - same buttons, far less
+   scrolling to reach the Erase/Reset/Fire controls. */
+.control-groups { display: flex; flex-direction: row; flex-wrap: wrap; gap: var(--gap-md); }
+.control-group { display: flex; flex-direction: column; gap: 4px; flex: 1 1 140px; min-width: 140px; }
+#pyro-fire-buttons { display: flex; flex-direction: column; gap: 4px; }
+.control-group-label { font-size: var(--fs-xs); color: #94a3b8; text-transform: uppercase; margin-bottom: 1px; }
+.control-group .btn { height: 36px; font-size: var(--fs-sm); padding: 3px 8px; }
+.control-readout-group { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; padding-top: 4px; border-top: 1px solid var(--border); }
+.control-readout { font-size: var(--fs-xs); color: #cbd5e1; }
+.control-readout span { color: white; font-weight: 600; }
+
+/* #config-fields is the container JS injects the <table class="config-table">
+   into (see 07-config-controls.js) -- no separate wrapper div to target, so
+   the horizontal-scroll safety net (mirrors the sibling "ars" tool's
+   .log-table-wrap) goes directly on it, so a long label + input + Set/Get
+   pair can never clip/overflow the page even on the narrowest supported
+   phone. min-width:0 for the same reason as .tabs above: a flex item (this
+   is one, inside .config-main's column flex) defaults to min-width:auto,
+   which otherwise stops overflow-x:auto from ever actually kicking in below
+   the content's intrinsic width. */
+#config-fields { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 6px; min-width: 0; }
+.config-table { width: 100%; border-collapse: collapse; font-size: var(--fs-md); }
+.config-table th { text-align: left; font-size: var(--fs-xs); color: #94a3b8; text-transform: uppercase; padding: 4px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.config-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.config-table-label { color: #cbd5e1; }
+.config-table-input input {
+    background: #0f172a; border: 1px solid var(--border); color: white;
+    padding: 8px; border-radius: 4px; width: 130px; font-size: var(--fs-md); box-sizing: border-box;
+}
+.config-table-actions { display: flex; gap: 5px; white-space: nowrap; }
+.config-table-actions .btn { width: 50px; height: 32px; padding: 2px; font-size: var(--fs-xs); }
+
+.btn {
+    background-color: var(--accent); color: var(--bg-color); border: none;
+    padding: 10px; border-radius: 6px; font-weight: 600; cursor: pointer; width: 100%;
+    min-height: 44px; display: flex; align-items: center; justify-content: center;
+    box-sizing: border-box; text-align: center;
+}
+.btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.btn-secondary { background-color: var(--border); color: white; }
+.btn-danger { background-color: var(--danger); color: white; }
+.btn-warn { background-color: #f59e0b; color: black; }
+.btn.nav-btn { width: auto; height: auto; padding: 10px 14px; font-size: 0.85rem; flex-shrink: 0; min-height: 44px; }
+
+.sidebar-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.sidebar-action-label { cursor: pointer; }
+.filter-check { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: #94a3b8; margin: 4px 0; cursor: pointer; }
+
+.context-menu {
+    position: fixed; z-index: 500; background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px; display: flex; flex-direction: column; min-width: 150px;
+}
+.context-menu button {
+    background: none; border: none; color: #cbd5e1; text-align: left; cursor: pointer;
+    padding: 10px 12px; border-radius: 4px; font-size: var(--fs-sm);
+}
+.context-menu button:hover { background: #334155; }
+.context-menu-danger { color: #ef4444; }
+
+.streaming-badge { font-size: var(--fs-xs); font-weight: bold; padding: 3px 10px; border-radius: 4px; }
+.streaming-badge.streaming-on { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+.streaming-badge.streaming-off { background: #334155; color: #94a3b8; }
+
+.cmd-row-btn { width: 90px; flex-shrink: 0; }
+/* #cmd-input has inline flex-grow:1 (see body.html) but no min-width, so its
+   browser-default text-input intrinsic min-width (~170-190px in Chrome)
+   wins over the ~70px actually left after 3 .cmd-row-btn siblings - same
+   flex min-width:auto gotcha as .tabs/#config-fields above, just without an
+   overflow-x:auto anywhere in this row to (partially) mask it. */
+#cmd-input { min-width: 0; }
+
+#series-modal, #config-modal, #profile-modal {
+    display: none; position: fixed; z-index: 2000; left: 0; top: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.85); align-items: center; justify-content: center;
+}
+.modal-box {
+    background: var(--card-bg); padding: 16px; border-radius: 12px; width: 92vw;
+    border: 1px solid var(--border); max-height: 80vh; overflow-y: auto;
+}
+#config-modal .modal-box { width: 96vw; max-width: 96vw; }
+.series-list { display: grid; grid-template-columns: 1fr; gap: 10px; margin: 16px 0; }
+.series-opt { font-size: 0.85rem; display: flex; align-items: center; gap: 10px; cursor: pointer; color: #cbd5e1; }
+
+#flight-list { flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: #0f172a; min-height: 150px; max-height: 260px; }
+
+/* Offload tab: flight list above the graph, not beside it - the list is
+   what you pick from first, so it goes first when stacked instead of last. */
+.offload-layout { display: flex; flex-direction: column; gap: 12px; }
+.offload-sidebar { width: 100%; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.offload-sidebar-title { font-size: 0.8rem; font-weight: 600; color: #cbd5e1; text-align: center; padding: 4px 0; }
+.offload-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+/* Live Map tab: map first (the primary visual), telemetry panel below it. */
+.live-map-layout { display: flex; flex-direction: column; gap: 10px; }
+.live-map-container { height: 55vh; min-height: 280px; border-radius: 12px; border: 1px solid var(--border); background: var(--card-bg); position: relative; }
+#live-map { width: 100%; height: 100%; border-radius: 12px; }
+.leaflet-container { border-radius: 12px; background: #0b1220; font-family: 'Inter', sans-serif; }
+
+.qr-overlay {
+    position: absolute; right: 8px; bottom: 8px; z-index: 450;
+    background: rgba(15, 23, 42, 0.9); border: 1px solid var(--border); border-radius: 8px;
+    padding: 5px; text-align: center;
+}
+.qr-overlay #qr-canvas { width: 64px; height: 64px; line-height: 0; }
+.qr-overlay #qr-canvas img, .qr-overlay #qr-canvas table, .qr-overlay #qr-canvas svg { width: 64px !important; height: 64px !important; }
+.qr-label { font-size: 0.55rem; color: #94a3b8; margin-top: 3px; }
+
+.map-hint-overlay {
+    position: absolute; left: 8px; bottom: 8px; z-index: 450;
+    background: rgba(15, 23, 42, 0.9); border: 1px solid var(--border); border-radius: 8px;
+    padding: 5px 8px; font-size: var(--fs-xs); color: #94a3b8; text-align: left;
+}
+#map-save-status:empty, .map-hint-text:empty { display: none; }
+#map-save-status { color: var(--accent); }
+.map-hint-text { opacity: 0.7; }
+
+.live-map-sidebar { width: 100%; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+
+.telemetry-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column; }
+.telemetry-section { padding: 8px 10px; border-top: 1px solid var(--border); }
+.telemetry-section:first-child { border-top: none; }
+
+/* Dials shrunk from 150px to 110px: two side by side plus the gap between
+   them needs to fit inside the narrowest supported phone's content width
+   (~340px after padding) with margin to spare, not just the 360px desktop
+   sidebar this was originally sized for. */
+.telemetry-dials { display: flex; justify-content: space-evenly; align-items: flex-start; gap: 8px; }
+.dial-block { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.dial-label { font-size: 0.65rem; color: #94a3b8; }
+
+.compass-dial { width: 110px; height: 110px; border-radius: 50%; border: 2px solid var(--border); position: relative; background: #0f172a; flex-shrink: 0; }
+.compass-tick { position: absolute; font-size: 0.65rem; font-weight: 700; color: #94a3b8; }
+.compass-tick-n { top: 4px; left: 50%; transform: translateX(-50%); color: #f8fafc; }
+.compass-tick-e { right: 7px; top: 50%; transform: translateY(-50%); }
+.compass-tick-s { bottom: 4px; left: 50%; transform: translateX(-50%); }
+.compass-tick-w { left: 7px; top: 50%; transform: translateY(-50%); }
+.compass-needle {
+    position: absolute; left: 50%; top: 50%; width: 0; height: 0;
+    margin-left: -6px; margin-top: -39px; transform-origin: 6px 39px;
+    border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 39px solid #ef4444;
+    transition: transform 0.2s linear;
+}
+
+.navball { width: 110px; height: 110px; border-radius: 50%; overflow: hidden; position: relative; border: 2px solid var(--border); background: #1a5f7a; flex-shrink: 0; }
+.navball canvas { width: 100%; height: 100%; display: block; }
+.navball-reticle { position: absolute; left: 50%; top: 50%; width: 32px; height: 2px; background: #f8fafc; margin-left: -16px; margin-top: -1px; box-shadow: 0 0 2px black; }
+.navball-reticle::before { content: ''; position: absolute; left: 50%; top: -8px; width: 2px; height: 8px; background: #f8fafc; margin-left: -1px; box-shadow: 0 0 2px black; }
+
+.telemetry-stats { display: flex; gap: 10px; }
+.stat-block { flex: 1; text-align: center; }
+.stat-label { font-size: 0.6rem; color: #94a3b8; text-transform: uppercase; margin-bottom: 2px; }
+.stat-value { font-size: 1.4rem; font-weight: bold; color: var(--accent); }
+.stat-value-sm { font-size: 0.85rem; }
+
+.telemetry-pyros { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+.pyro-item { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: #94a3b8; }
+.pyro-badge { font-weight: bold; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; }
+.pyro-badge.pyro-open { background: #334155; color: #94a3b8; }
+.pyro-badge.pyro-ready { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+.pyro-badge.pyro-fired { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+
+/* Elevation sparkline: fixed height instead of "grows to fill leftover
+   sidebar height" - that only made sense when the sidebar was a fixed-height
+   column beside the map; stacked below it now, it needs its own explicit
+   size like #plot-container/#live-plot-container below. */
+.telemetry-elevation { display: flex; flex-direction: column; min-height: 140px; }
+.elevation-sparkline { flex-grow: 1; min-height: 120px; }
+
+.map-context-menu { position: absolute; z-index: 500; background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px; }
+.map-context-menu .btn { width: auto; white-space: nowrap; font-size: 0.75rem; padding: 8px 12px; height: auto; min-height: 0; }
+.rocket-marker { color: var(--accent); font-size: 20px; text-align: center; text-shadow: 0 0 3px black; line-height: 20px; }
+
+/* Firmware tab: label-above-field instead of label-beside-field (same fix as
+   ars's .row on mobile) - a 70px label + a select that wants 280px doesn't
+   fit beside each other in ~340px of usable width. */
+.fw-panel { max-width: 100%; display: flex; flex-direction: column; gap: 14px; }
+.fw-field { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+.fw-label { width: auto; font-size: 0.75rem; color: #94a3b8; }
+#firmware-tab select {
+    background: #111827; border: 1px solid var(--border); color: white;
+    padding: 10px; border-radius: 6px; min-width: 0; width: 100%; font-size: 0.85rem; min-height: 44px;
+}
+.flight-item { padding: 8px 10px; border-bottom: 1px solid var(--border); cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; min-height: 44px; box-sizing: border-box; }
+.flight-item.active { background: #1e293b; border-left: 4px solid var(--accent); }
+.del-btn {
+    background: #334155; color: #ef4444; border: none; border-radius: 4px;
+    width: 32px; height: 32px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 1.1rem;
+}
+.del-btn:hover { background: #ef4444; color: white; }
+
+/* Plot/map containers: explicit min-height instead of relying on a flex
+   parent's fixed viewport-height row to stretch them - needed now that
+   they're stacked in a normally-flowing (not height-locked) column. */
+#plot-container, #live-plot-container { background-color: var(--card-bg); border-radius: 12px; border: 1px solid var(--border); min-height: 340px; }
+#terminal { background: #000; color: #00ff41; font-family: 'Courier New', monospace; padding: 10px; font-size: 0.75rem; overflow-y: auto; -webkit-overflow-scrolling: touch; border-radius: 8px; height: 140px; border: 1px solid var(--border); line-height: 1.4; }
+
+/* Stat grids: 2 columns instead of desktop's 6 (or 1fr/2fr/1fr for Offload) -
+   still full parity (same cards, same content), just enough per row to stay
+   readable at phone width instead of squeezing 6 across. */
+.stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.stat-card { background: var(--card-bg); padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); text-align: center; display: flex; flex-direction: column; justify-content: center; min-height: 44px; }
+/* Stays flex-direction:column (.stat-card's default, not overridden here) --
+   the two buttons inside have inline height:45% (see body.html) which is
+   written assuming a column stack; switching to a row here would leave
+   them squashed since the inline style can't be overridden without
+   !important. Just widened to span the full grid row on mobile. */
+.offload-action-card { background: rgba(56, 189, 248, 0.08); border: 1px solid var(--accent); grid-column: 1 / -1; min-height: 90px; }
+.stat-val { font-size: 0.95rem; font-weight: bold; color: var(--accent); line-height: 1.1; }
+.stat-unit { font-size: var(--fs-xs); color: #94a3b8; }
+
+.offload-stats-grid { grid-template-columns: repeat(2, 1fr); }
+.flight-summary-card { grid-column: 1 / -1; flex-direction: row; justify-content: space-evenly; align-items: center; }
+.flight-summary-item { display: flex; flex-direction: column; align-items: center; }
+.stat-card-buttons { grid-column: 1 / -1; flex-direction: row; gap: 4px; }
+.stat-card-buttons .btn { height: auto; flex-grow: 1; font-size: var(--fs-sm); padding: 8px 4px; }
+
+.hover-dashboard {
+    background: #111827; border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 8px; display: flex; flex-wrap: wrap; gap: 8px; min-height: 22px;
+    align-items: center; font-size: 0.75rem;
+}
+.hover-item { display: flex; gap: 5px; color: #94a3b8; }
+.hover-val { color: var(--accent); font-weight: bold; }
