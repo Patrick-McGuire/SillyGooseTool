@@ -111,6 +111,13 @@ const OfflineTileLayer = (typeof L !== 'undefined') ? L.TileLayer.extend({
 
 let liveMap = null, liveMapTileLayers = null, liveMapActiveTileKey = 'satellite', liveMapMarker = null, liveMapPath = null;
 const liveMapTrack = [];
+// Ground station's own position (see Connection.handleGroundGps() in 03-connection.js) - a
+// second, distinct marker from the rocket's, since the two are different physical locations.
+// Created lazily on the first real fix (see updateLiveMapGroundPosition) rather than up front like
+// liveMapMarker: unlike the rocket marker, showing this at DEFAULT_MAP_CENTER before any ground
+// station has ever reported a position would be actively misleading (that's not "no data yet",
+// it's a real place on Earth).
+let liveMapGroundMarker = null;
 
 // The tab's initial layout (map center, QR code, elevation graph) is
 // deliberately static - it must look and size the same regardless of whether
@@ -142,7 +149,10 @@ function initLiveMap() {
     // at rather than always the first one.
     liveMap.on('baselayerchange', (e) => { liveMapActiveTileKey = labelToKey[e.name] || liveMapActiveTileKey; });
 
-    liveMapPath = L.polyline([], { color: '#38bdf8', weight: 2 }).addTo(liveMap);
+    // Deliberately NOT the same color as the rocket marker itself (--accent, see .rocket-marker in
+    // app.css) - the two need to read as distinct at a glance where the path passes near/under the
+    // current marker position.
+    liveMapPath = L.polyline([], { color: '#facc15', weight: 2 }).addTo(liveMap);
     liveMapMarker = L.marker(DEFAULT_MAP_CENTER, {
         icon: L.divIcon({ className: 'rocket-marker', html: '&#9650;', iconSize: [20, 20], iconAnchor: [10, 10] })
     }).addTo(liveMap);
@@ -372,11 +382,19 @@ function updateCompass(yawDeg) {
     if (label) label.textContent = `${((yawDeg + 360) % 360).toFixed(0)}°`;
 }
 
-function setPyroBadge(id, continuity, fired) {
+// Four states, most-severe first. continuity/armed are already resolved to plain booleans by
+// publishTelemetryFromRow() (which knows the active profile's pyroHasArmedTier) - this function
+// stays profile-agnostic, just rendering whatever it's given.
+function setPyroBadge(id, continuity, armed, fired) {
     const el = document.getElementById(id);
     if (!el) return;
-    el.textContent = fired ? 'FIRED' : (continuity ? 'READY' : 'OPEN');
-    el.className = 'pyro-badge ' + (fired ? 'pyro-fired' : (continuity ? 'pyro-ready' : 'pyro-open'));
+    let label, cls;
+    if (fired) { label = 'FIRED'; cls = 'pyro-fired'; }
+    else if (armed) { label = 'ARMED'; cls = 'pyro-armed'; }
+    else if (continuity) { label = 'UNARMED'; cls = 'pyro-unarmed'; }
+    else { label = 'OPEN'; cls = 'pyro-open'; }
+    el.textContent = label;
+    el.className = 'pyro-badge ' + cls;
 }
 
 // Rebuilds the Live Map's pyro badges, one per channel in the active
@@ -389,6 +407,17 @@ function rebuildPyroWidgets(conn) {
     ).join('');
 }
 
+// u-blox fixType semantics (see UBloxV2::read() in firmware - m_fixQuality = m_gps.getFixType()):
+// 0 = no fix, 1 = dead-reckoning only, 2 = 2D fix, 3 = 3D fix, 4 = GNSS+dead-reckoning, 5 = time
+// only. Without a real fix (<2), lat/lon/alt are NOT reliably zero - the module can report
+// wildly-varying garbage coordinates (confirmed on real hardware: >0.1 deg/s jumps, i.e.
+// impossible speeds, while fixQuality read 0 throughout) - so "is it exactly (0,0)" is not a safe
+// filter on its own. Gate on fixQuality instead; the (0,0) check right after this is just extra
+// defense against the one case a real fix could legitimately report exactly null-island.
+function hasRealFix(fixQuality) {
+    return !isNaN(fixQuality) && fixQuality >= 2;
+}
+
 function updateLiveMapPosition(lat, lon) {
     if (!liveMap) return;
     liveMapMarker.setLatLng([lat, lon]);
@@ -397,6 +426,24 @@ function updateLiveMapPosition(lat, lon) {
     liveMapPath.setLatLngs(liveMapTrack);
     if (liveMapTrack.length === 1) liveMap.setView([lat, lon], 15);
     updateGpsQrCode(lat, lon);
+}
+
+// Places/moves the ground station's marker - see liveMapGroundMarker's comment for why this
+// creates it lazily instead of up front like the rocket marker. Only recenters the view on it if
+// the rocket hasn't reported a position yet (liveMapTrack empty): once the rocket's flying, its
+// track is the more useful thing to keep in view, and updateLiveMapPosition's own recenter (on the
+// rocket's first fix) already covers that case.
+function updateLiveMapGroundPosition(lat, lon) {
+    if (!liveMap) return;
+    if (!liveMapGroundMarker) {
+        liveMapGroundMarker = L.marker([lat, lon], {
+            icon: L.divIcon({ className: 'ground-marker', html: '&#9679;', iconSize: [16, 16], iconAnchor: [8, 8] }),
+            title: 'Ground station'
+        }).addTo(liveMap);
+        if (liveMapTrack.length === 0) liveMap.setView([lat, lon], 15);
+    } else {
+        liveMapGroundMarker.setLatLng([lat, lon]);
+    }
 }
 
 // QR code linking to the latest GPS fix on Google Maps, generated entirely
@@ -430,10 +477,19 @@ function publishTelemetryFromRow(conn, row) {
     }
 
     // One entry per pyro channel in the active profile (see ALTIMETER_PROFILES[...].pyros).
-    Telemetry.set('pyros', conn.profile.pyros.map(p => ({
-        id: p.id, label: p.label,
-        continuity: row[p.contCol] === "1", fired: row[p.firedCol] === "1"
-    })));
+    // contCol's raw value is 0/1/2 on a pyroHasArmedTier board (SeriousGoose) but just 0/1
+    // otherwise (SillyGoose) - see that flag's comment in 02-protocol.js. Resolved to plain
+    // continuity/armed booleans here (where the active profile is known) so setPyroBadge() stays
+    // profile-agnostic.
+    Telemetry.set('pyros', conn.profile.pyros.map(p => {
+        const state = parseInt(row[p.contCol], 10) || 0;
+        return {
+            id: p.id, label: p.label,
+            continuity: state >= 1,
+            armed: conn.profile.pyroHasArmedTier ? state >= 2 : state >= 1,
+            fired: row[p.firedCol] === "1"
+        };
+    }));
     Telemetry.set('flightState', parseInt(row[cols.flightState]));
 
     if (conn.profile.hasGps && cols.gpsLat !== undefined) {
@@ -458,7 +514,7 @@ function initTelemetryWidgets() {
         updateNavball(roll, pitch, yaw);
         updateCompass(yaw);
     });
-    Telemetry.subscribe('pyros', list => list.forEach(p => setPyroBadge(`pyro-${p.id}`, p.continuity, p.fired)));
+    Telemetry.subscribe('pyros', list => list.forEach(p => setPyroBadge(`pyro-${p.id}`, p.continuity, p.armed, p.fired)));
     Telemetry.subscribe('flightState', v => {
         const el = document.getElementById('widget-flightstate-val');
         if (el) el.textContent = FLIGHT_STATE_NAMES[v] || '-';
@@ -468,8 +524,30 @@ function initTelemetryWidgets() {
         if (!g.hasGps) { if (gpsEl) gpsEl.textContent = 'No GPS on this board'; return; }
         if (gpsEl) gpsEl.textContent = isNaN(g.fixQuality) ? '-' : `fix ${g.fixQuality} · ${g.sats} sats`;
         // Leave the map/QR showing whatever they last showed (the static default,
-        // or a previous real fix) until an actual non-zero fix comes in.
-        if (!isNaN(g.lat) && !isNaN(g.lon) && (g.lat !== 0 || g.lon !== 0)) updateLiveMapPosition(g.lat, g.lon);
+        // or a previous real fix) until an actual fix comes in - see hasRealFix()'s comment for
+        // why fixQuality, not just "is lat/lon exactly zero", is the right gate here.
+        if (hasRealFix(g.fixQuality) && !isNaN(g.lat) && !isNaN(g.lon)) updateLiveMapPosition(g.lat, g.lon);
+    });
+    // Ground station's own position (see Connection.handleGroundGps() in 03-connection.js). The
+    // stat block is hidden until the first update (see body.html) - only meaningful when actually
+    // connected to a ground station, so there's no point showing it (permanently dashed) for a
+    // direct flight-computer connection. Text updates unconditionally, even with fixQuality 0/no
+    // fix - that's the direct signal for "ground station data IS arriving, just no fix yet" vs the
+    // map marker's own "only place it once we know a real place" rule below.
+    Telemetry.subscribe('groundGps', g => {
+        const block = document.getElementById('widget-ground-gps-block');
+        if (block) block.style.display = '';
+        const el = document.getElementById('widget-ground-gps-val');
+        if (el) el.textContent = isNaN(g.fixQuality) ? '-' : `fix ${g.fixQuality} · ${g.sats} sats`;
+        if (hasRealFix(g.fixQuality) && !isNaN(g.lat) && !isNaN(g.lon)) updateLiveMapGroundPosition(g.lat, g.lon);
+    });
+    // Per-packet RSSI/SNR of the last relayed radio packet (see Connection.handleGroundRadioRx()
+    // in 03-connection.js) - same "reveal on first update" treatment as widget-ground-gps-block.
+    Telemetry.subscribe('radioLink', r => {
+        const block = document.getElementById('widget-radio-link-block');
+        if (block) block.style.display = '';
+        const el = document.getElementById('widget-radio-link-val');
+        if (el) el.textContent = `${r.rssi} dBm · ${r.snr.toFixed(1)} dB SNR`;
     });
 }
 

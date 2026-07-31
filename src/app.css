@@ -230,17 +230,23 @@
         .navball-reticle { position: absolute; left: 50%; top: 50%; width: 43px; height: 2px; background: #f8fafc; margin-left: -21.5px; margin-top: -1px; box-shadow: 0 0 2px black; }
         .navball-reticle::before { content: ''; position: absolute; left: 50%; top: -10px; width: 2px; height: 10px; background: #f8fafc; margin-left: -1px; box-shadow: 0 0 2px black; }
 
-        .telemetry-stats { display: flex; gap: 10px; }
-        .stat-block { flex: 1; text-align: center; }
+        /* Grid, not flex: with 5 possible blocks (Flight State/Battery/GPS/Ground GPS/Radio Link,
+           the last two only shown once a ground station connects - see body.html) flex:1 squeezed
+           every block equally narrow and let value text wrap unpredictably. A fixed-column grid of
+           bordered cards wraps into rows instead, stays legible at any count, and reads as a
+           deliberate dashboard rather than a jammed single line. */
+        .telemetry-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+        .stat-block { text-align: center; background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 6px; padding: 6px 4px; min-width: 0; }
         .stat-label { font-size: 0.6rem; color: #94a3b8; text-transform: uppercase; margin-bottom: 2px; }
-        .stat-value { font-size: 1.4rem; font-weight: bold; color: var(--accent); }
+        .stat-value { font-size: 1.4rem; font-weight: bold; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .stat-value-sm { font-size: 0.85rem; }
 
-        .telemetry-pyros { display: flex; gap: 20px; justify-content: center; }
+        .telemetry-pyros { display: flex; flex-wrap: wrap; gap: 12px 20px; justify-content: center; }
         .pyro-item { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: #94a3b8; }
         .pyro-badge { font-weight: bold; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; }
         .pyro-badge.pyro-open { background: #334155; color: #94a3b8; }
-        .pyro-badge.pyro-ready { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+        .pyro-badge.pyro-unarmed { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+        .pyro-badge.pyro-armed { background: rgba(34, 197, 94, 0.2); color: var(--success); }
         .pyro-badge.pyro-fired { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
 
         /* The one section that should claim leftover sidebar height instead
@@ -253,6 +259,7 @@
         .map-context-menu { position: absolute; z-index: 500; background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px; }
         .map-context-menu .btn { width: auto; white-space: nowrap; font-size: 0.75rem; padding: 6px 10px; height: auto; }
         .rocket-marker { color: var(--accent); font-size: 20px; text-align: center; text-shadow: 0 0 3px black; line-height: 20px; }
+        .ground-marker { color: var(--danger); font-size: 18px; text-align: center; text-shadow: 0 0 3px black; line-height: 18px; }
 
         /* Firmware tab */
         .fw-panel { max-width: 560px; display: flex; flex-direction: column; gap: 14px; }

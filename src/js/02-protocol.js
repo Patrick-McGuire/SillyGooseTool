@@ -27,7 +27,10 @@ const SERIOUS_GOOSE_HEADER = [
     "timestampMs", "pressurePa", "tempK", "accelX", "accelY", "accelZ",
     "gyroX", "gyroY", "gyroZ", "imuTemp", "magX", "magY", "magZ", "battV", "altitudeM",
     "velocityMS", "accelerationMSS", "unfiltAlt", "flightState",
-    "drogueCont", "drogueFired", "mainCont", "mainFired", "auxCont", "auxFired",
+    // drogueState/mainState/auxState pack a 0/1/2 continuity+armed reading (see ArduinoPyro's
+    // two-threshold model, firmware) into the same single byte a plain bool continuity flag
+    // already used - no wire-size change from SillyGoose's continuity/fired layout below.
+    "drogueState", "drogueFired", "mainState", "mainFired", "auxState", "auxFired",
     "tiltMagnitudeDeg", "angularVelRadS_x", "angularVelRadS_y", "angularVelRadS_z",
     "quaternion_a", "quaternion_b", "quaternion_c", "quaternion_d",
     "gpsLatitudeDeg", "gpsLongitudeDeg", "gpsAltitudeM", "gpsUnixTimeS", "gpsHdop", "gpsVdop", "gpsFixQuality", "gpsSatellitesTracked"
@@ -45,7 +48,7 @@ const SILLY_GOOSE_LOG_HEADER_STR = "timestampMs\tpressurePa\tbarometerTemperatur
 // Must match SeriousGoose.cpp's LOG_HEADER macro byte-for-byte - it's hashed
 // (see crc16/headerCrcFor below) to auto-detect/validate a binary offload's
 // format, so any drift here silently breaks that detection instead of erroring.
-const SERIOUS_GOOSE_LOG_HEADER_STR = "timestampMs\tpressurePa\tbarometerTemperatureK\taccelerationMSS_x\taccelerationMSS_y\taccelerationMSS_z\tvelocityRadS_x\tvelocityRadS_y\tvelocityRadS_z\timuTemperatureK\tmagFieldTeslaRaw_x\tmagFieldTeslaRaw_y\tmagFieldTeslaRaw_z\tbatteryVoltageV\taltitudeM\tvelocityMS\taccelerationMSS\tunfilteredAltitudeM\tflightState\tdrogueContinuity\tdrogueFired\tmainContinuity\tmainFired\tauxContinuity\tauxFired\ttiltMagnitudeDeg\tangularVelRadS_x\tangularVelRadS_y\tangularVelRadS_z\tquaternion_a\tquaternion_b\tquaternion_c\tquaternion_d\tgpsLatitudeDeg\tgpsLongitudeDeg\tgpsAltitudeM\tgpsUnixTimeS\tgpsHdop\tgpsVdop\tgpsFixQuality\tgpsSatellitesTracked";
+const SERIOUS_GOOSE_LOG_HEADER_STR = "timestampMs\tpressurePa\tbarometerTemperatureK\taccelerationMSS_x\taccelerationMSS_y\taccelerationMSS_z\tvelocityRadS_x\tvelocityRadS_y\tvelocityRadS_z\timuTemperatureK\tmagFieldTeslaRaw_x\tmagFieldTeslaRaw_y\tmagFieldTeslaRaw_z\tbatteryVoltageV\taltitudeM\tvelocityMS\taccelerationMSS\tunfilteredAltitudeM\tflightState\tdrogueState\tdrogueFired\tmainState\tmainFired\tauxState\tauxFired\ttiltMagnitudeDeg\tangularVelRadS_x\tangularVelRadS_y\tangularVelRadS_z\tquaternion_a\tquaternion_b\tquaternion_c\tquaternion_d\tgpsLatitudeDeg\tgpsLongitudeDeg\tgpsAltitudeM\tgpsUnixTimeS\tgpsHdop\tgpsVdop\tgpsFixQuality\tgpsSatellitesTracked";
 
 const SILLY_GOOSE_CONFIGS = [
     { id: "DROGUE_DELAY", label: "Drogue Delay (milliseconds)" },
@@ -243,6 +246,13 @@ const ALTIMETER_PROFILES = {
             { id: "drogue", label: "Drogue", contCol: 16, firedCol: 17, fireCmd: "--fire -d" },
             { id: "main", label: "Main", contCol: 18, firedCol: 19, fireCmd: "--fire -m" }
         ],
+        // ArduinoPyro's continuity byte is 0/1 here (single threshold - no separate armed
+        // reading), vs SeriousGoose's 0/1/2 below - see publishTelemetryFromRow() in
+        // 06-live-map.js, which is what actually branches on this to interpret contCol's raw
+        // value correctly per-profile. Continuity alone reads as ARMED for boards without this
+        // tier (matches ArduinoPyro::isArmed()'s firmware-side default), so the UNARMED badge
+        // state is simply never reached here.
+        pyroHasArmedTier: false,
         hasGps: false,
         decodeDataRecord(rec) {
             const dv = new DataView(rec.buffer, rec.byteOffset, rec.length);
@@ -263,7 +273,7 @@ const ALTIMETER_PROFILES = {
         id: "SeriousGoose",
         displayName: "SeriousGoose",
         header: SERIOUS_GOOSE_HEADER,
-        oldMinCols: 36, // still a valid MINIMUM column count even post-mag/aux-pyro (41 cols now) - not bumped
+        oldMinCols: 36, // still a valid MINIMUM column count (41 cols now) - not bumped
         binDataSize: 136, // sizeof(SillyGooseLogData) in SeriousGoose.cpp, packed (100 + 12 mag bytes + 2 aux bytes + 22 GPS bytes)
         fwLogHeader: SERIOUS_GOOSE_LOG_HEADER_STR,
         defaultSeries: [14, 15, 16],
@@ -275,6 +285,11 @@ const ALTIMETER_PROFILES = {
             quatA: 29, quatB: 30, quatC: 31, quatD: 32,
             gpsLat: 33, gpsLon: 34, gpsAlt: 35, gpsUnixTimeS: 36, gpsHdop: 37, gpsVdop: 38, gpsFixQuality: 39, gpsSatellites: 40
         },
+        // contCol's raw byte value is 0/1/2 here (open/unarmed/armed - see ArduinoPyro's
+        // two-threshold model, firmware) vs SillyGoose's 0/1 (above) - packed into the exact same
+        // single continuity byte either way, no wire-size change. See pyroHasArmedTier's comment
+        // (above) for where this is actually interpreted.
+        pyroHasArmedTier: true,
         pyros: [
             { id: "drogue", label: "Drogue", contCol: 19, firedCol: 20, fireCmd: "--fire -d" },
             { id: "main", label: "Main", contCol: 21, firedCol: 22, fireCmd: "--fire -m" },
@@ -290,11 +305,11 @@ const ALTIMETER_PROFILES = {
             const magZ = dv.getFloat32(o, true); o += 4;
             const pyro = decodeBattThroughPyroFields(dv, o);
             o = pyro.offset;
-            const auxContinuity = dv.getUint8(o); o += 1;
+            const auxState = dv.getUint8(o); o += 1;
             const auxFired = dv.getUint8(o); o += 1;
             const orient = decodeOrientationFields(dv, o);
             o = orient.offset;
-            const all = [...common.fields, magX, magY, magZ, ...pyro.fields, auxContinuity, auxFired, ...orient.fields];
+            const all = [...common.fields, magX, magY, magZ, ...pyro.fields, auxState, auxFired, ...orient.fields];
             all.push(dv.getFloat32(o, true)); o += 4; // gpsLatitudeDeg
             all.push(dv.getFloat32(o, true)); o += 4; // gpsLongitudeDeg
             all.push(dv.getFloat32(o, true)); o += 4; // gpsAltitudeM
@@ -315,14 +330,22 @@ const ALTIMETER_PROFILES = {
     }
 };
 
-// Board families that don't produce a flight log at all (pure USB/radio bridge) -
-// only relevant to the Firmware tab, never to Offload/Live/Config.
+// Board families that don't produce a flight log at all (pure USB/radio bridge) - relevant to the
+// Firmware tab always, and to Offload/Live/Config too for any family with a flightProfileId (see
+// below).
 const NON_LOGGING_BOARD_FAMILIES = {
     SeriousGooseGround: {
         id: "SeriousGooseGround",
         displayName: "SeriousGooseGround",
         firmwareVariants: [{ value: "V1", label: "SeriousGooseGround V1" }],
-        usbNameMatch: /seriousgooseground/i
+        usbNameMatch: /seriousgooseground/i,
+        // A ground station relays another board's telemetry over radio (SeriousGooseGround.cpp's
+        // "RADIO_RX\t<rssi>\t<snr>\t<hex>" lines) instead of producing its own flight log - this
+        // says which ALTIMETER_PROFILES entry to decode those relayed hex payloads against.
+        // SeriousGooseGround only ever pairs with a SeriousGoose flight computer (same PCB/pinmap
+        // family, see SeriousGooseGround.cpp's own header comment) - a future ground station for a
+        // different flight computer would need its own value here.
+        flightProfileId: "SeriousGoose"
     }
 };
 const ALL_BOARD_FAMILIES = { ...ALTIMETER_PROFILES, ...NON_LOGGING_BOARD_FAMILIES };

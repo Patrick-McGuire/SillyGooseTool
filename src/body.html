@@ -163,6 +163,20 @@
                             <div class="stat-label">GPS</div>
                             <div id="widget-gps-val" class="stat-value stat-value-sm">-</div>
                         </div>
+                        <!-- Only relevant when connected to a ground station (see Connection.isGroundStation
+                             in 03-connection.js) - hidden otherwise so a direct flight-computer connection
+                             doesn't show a permanently-dashed, meaningless stat. -->
+                        <div id="widget-ground-gps-block" class="stat-block" style="display:none;">
+                            <div class="stat-label">Ground GPS</div>
+                            <div id="widget-ground-gps-val" class="stat-value stat-value-sm">-</div>
+                        </div>
+                        <!-- Only relevant when connected to a ground station - see the 'radioLink' Telemetry
+                             key published by Connection.handleGroundRadioRx() in 03-connection.js. Hidden
+                             the same way and for the same reason as widget-ground-gps-block above. -->
+                        <div id="widget-radio-link-block" class="stat-block" style="display:none;">
+                            <div class="stat-label">Radio Link</div>
+                            <div id="widget-radio-link-val" class="stat-value stat-value-sm">-</div>
+                        </div>
                     </div>
 
                     <!-- One badge per pyro channel (see rebuildPyroWidgets / ALTIMETER_PROFILES[...].pyros). -->

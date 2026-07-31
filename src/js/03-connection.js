@@ -113,6 +113,11 @@ class Connection {
         this.activeSeries = [...this.profile.defaultSeries];
         this.configs = this.profile.configs;
         this.fwHeaderCrc = headerCrcFor(this.profile);
+        // True when the connected board is a ground station (see NON_LOGGING_BOARD_FAMILIES[...]
+        // .flightProfileId) relaying another board's telemetry over radio rather than producing its
+        // own flight log - set by detectAltimeterOnConnect(). Changes how processLine() treats
+        // "RADIO_RX"/"GPS" lines (see handleGroundRadioRx/handleGroundGps below).
+        this.isGroundStation = false;
 
         this.recording = false;
         this.streaming = false;
@@ -375,6 +380,15 @@ class Connection {
         const isDataRow = /^\d/.test(line);
         if (!((this.recording || this.streaming) && isDataRow)) logTerm(line);
 
+        // Ground station relay lines (see SeriousGooseGround.cpp) - handled after the generic
+        // terminal echo above (so they're still visible there like every other line - useful for
+        // eyeballing e.g. GPS fix/satellite counts directly) but before the MSG-text matching
+        // below, since they're this connection's actual telemetry, not log text.
+        if (this.isGroundStation) {
+            if (line.startsWith("RADIO_RX\t")) { this.handleGroundRadioRx(line); return; }
+            if (line.startsWith("GPS\t")) { this.handleGroundGps(line); return; }
+        }
+
         if (line.includes("Entries in log:")) Telemetry.set('logEntries', line.split(':').pop().trim());
         if (line.includes("Remaining log length:")) Telemetry.set('logRemaining', formatLogTime(line.split(':').pop().trim()));
         if (line.includes("Logging")) Telemetry.set('logStatus', line.includes("enabled") ? "ON" : "OFF");
@@ -419,6 +433,66 @@ class Connection {
             else this.currentFlightMessages.push({ afterRow: this.currentFlightLines.length, text: line });
         }
         if (line.includes("Erase Complete")) setBusy(false);
+    }
+
+    // Decodes one "RADIO_RX\t<rssi>\t<snr>\t<hexPayload>" line (SeriousGooseGround.cpp) into the
+    // same tab-row text a direct connection's --streamLog produces, then feeds it through the
+    // normal live-telemetry path (handleLiveLine) - Live Stream, Live Map, and the pyro badges
+    // (including aux) all work exactly as they do for a direct connection, with no separate code
+    // path to keep in sync. A ground station has no "streaming on/off" concept of its own (unlike
+    // a direct connection's --streamLog) - the first relayed packet just turns it on, mirroring the
+    // "Streaming enabled" text handling above.
+    //
+    // The hex payload is the flight computer's raw LogDataStruct with NO leading id byte
+    // (radio.startTransmit() sends the struct directly - unlike a flash/offload record, which is
+    // wrapped in InternalStruct_s{id, data, crc}). profile.decodeDataRecord() always skips byte 0
+    // (the flash record's id byte) - prepending one dummy byte here reuses that decoder unmodified
+    // rather than forking a second copy of the field-offset logic.
+    handleGroundRadioRx(line) {
+        const parts = line.split('\t');
+        if (parts.length < 4) return;
+        const rssi = parseInt(parts[1], 10);
+        const snr = parseFloat(parts[2]);
+        const hex = parts[3];
+        if (hex.length % 2 !== 0) {
+            DebugLog.warn('ground', `RADIO_RX odd-length hex payload (${hex.length} chars) - dropping`);
+            return;
+        }
+        const payload = new Uint8Array(hex.length / 2);
+        for (let i = 0; i < payload.length; i++) payload[i] = parseInt(hex.substr(i * 2, 2), 16);
+        if (payload.length !== this.profile.binDataSize) {
+            DebugLog.warn('ground', `RADIO_RX payload is ${payload.length} bytes, expected ${this.profile.binDataSize} for ${this.profile.id} - dropping`);
+            return;
+        }
+        const padded = new Uint8Array(payload.length + 1); // dummy id byte at [0], see comment above
+        padded.set(payload, 1);
+
+        Telemetry.set('radioLink', { rssi, snr });
+        if (!this.streaming) {
+            this.streaming = true; this.liveDataBuffer = []; this.streamLogLines = []; this.currentStreamMessages = [];
+            Telemetry.set('streaming', true);
+        }
+        try {
+            handleLiveLine(this, this.profile.decodeDataRecord(padded));
+        } catch (e) {
+            DebugLog.warn('ground', 'RADIO_RX decode failed: ' + e.message);
+        }
+    }
+
+    // Decodes the ground station's OWN GPS fix - "GPS\t<lat>\t<lon>\t<alt>\t<unixTime>\t<hdop>\t
+    // <vdop>\t<fixQuality>\t<satellites>" (SeriousGooseGround.cpp) - NOT the relayed flight
+    // computer's position (that comes through RADIO_RX -> handleGroundRadioRx -> the profile's own
+    // gpsLat/gpsLon columns, published separately by publishTelemetryFromRow()). Kept under its own
+    // Telemetry key since the two are different physical locations; a "ground/pad marker" on the
+    // Live Map is a natural future consumer (see that file's header comment).
+    handleGroundGps(line) {
+        const p = line.split('\t');
+        if (p.length < 9) return;
+        Telemetry.set('groundGps', {
+            lat: parseFloat(p[1]), lon: parseFloat(p[2]), alt: parseFloat(p[3]),
+            unixTimeS: parseInt(p[4], 10), hdop: parseInt(p[5], 10), vdop: parseInt(p[6], 10),
+            fixQuality: parseInt(p[7], 10), sats: parseInt(p[8], 10)
+        });
     }
 
     // Publishes the running row count every 100 rows rather than every row -
@@ -718,9 +792,18 @@ async function detectAltimeterOnConnect(conn) {
         showProfileSelectModal(conn, idHex
             ? `Couldn't auto-detect the connected board (USB ${idHex}) - pick which altimeter this is.`
             : "Couldn't auto-detect the connected board - pick which altimeter this is.");
+        conn.isGroundStation = false;
+        return;
     }
-    // A detected non-logging family (e.g. SeriousGooseGround) or a detected
-    // logging profile both fall through here with nothing left to do -
-    // fwDetectVariant()/fwDetectFamilyFromUsbIds() already called setActiveProfile() in the
-    // latter case.
+    // A detected logging profile falls through here with nothing left to do -
+    // fwDetectVariant()/fwDetectFamilyFromUsbIds() already called setActiveProfile() for it.
+    // A detected non-logging family (e.g. SeriousGooseGround) needs its own handling: point the
+    // connection's profile at whichever flight computer it relays for (flightProfileId) so
+    // RADIO_RX payloads decode correctly, and flag it so processLine() treats relayed
+    // "RADIO_RX"/"GPS" lines as live telemetry instead of arbitrary log text. Note:
+    // fwDetectFamilyFromUsbIds() (browser build) can never actually return a non-logging family -
+    // see its own comment - so this only takes effect in the Electron desktop build today.
+    const nonLoggingFamily = NON_LOGGING_BOARD_FAMILIES[familyId];
+    conn.isGroundStation = !!(nonLoggingFamily && nonLoggingFamily.flightProfileId);
+    if (conn.isGroundStation) conn.setActiveProfile(nonLoggingFamily.flightProfileId);
 }
