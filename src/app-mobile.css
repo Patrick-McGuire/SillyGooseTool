@@ -275,7 +275,7 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; align-i
    parent's fixed viewport-height row to stretch them - needed now that
    they're stacked in a normally-flowing (not height-locked) column. */
 #plot-container, #live-plot-container { background-color: var(--card-bg); border-radius: 12px; border: 1px solid var(--border); min-height: 340px; }
-#terminal { background: #000; color: #00ff41; font-family: 'Courier New', monospace; padding: 10px; font-size: 0.75rem; overflow-y: auto; -webkit-overflow-scrolling: touch; border-radius: 8px; height: 140px; border: 1px solid var(--border); line-height: 1.4; }
+#terminal { background: #000; color: #00ff41; font-family: 'Courier New', monospace; padding: 10px; font-size: 0.75rem; overflow-y: auto; -webkit-overflow-scrolling: touch; border-radius: 8px; height: 140px; border: 1px solid var(--border); line-height: 1.4; white-space: pre-wrap; }
 
 /* Stat grids: 2 columns instead of desktop's 6 (or 1fr/2fr/1fr for Offload) -
    still full parity (same cards, same content), just enough per row to stay

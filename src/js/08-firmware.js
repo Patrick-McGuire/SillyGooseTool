@@ -181,24 +181,23 @@ async function fwDetectVariant(conn) {
 }
 
 // Browser counterpart to fwDetectVariant() above. Web Serial's port.getInfo() never exposes the
-// iProduct STRING Electron reads (no "SillyGooseV2"-style descriptor in a plain browser) - but
-// it does expose the numeric USB vendor/product ID, and Adafruit's Feather M0 (SillyGoose) vs
-// Feather M4 (SeriousGoose/SeriousGooseGround) boards enumerate under different PIDs (see their
-// platformio board defs). That's enough to tell the two hardware families apart, just not exact
-// variant number, and not SeriousGoose from SeriousGooseGround (identical M4 board -> same PID
-// either way). The latter ambiguity doesn't matter for detectAltimeterOnConnect() in
-// 03-connection.js though: SeriousGooseGround never produces a flight log, so of the two
-// ALTIMETER_PROFILES choices that modal actually offers, an M4 PID unambiguously means
-// SeriousGoose.
-// NOTE (2026-07): 0x800B is confirmed (on real hardware, normal boot - not the bootloader) as a
-// SillyGoose app-mode PID, despite matching Adafruit's stock feather_m0 board def's bootloader
-// entry - this custom build's actual descriptor doesn't follow that convention. 0x000B/0x0015
-// are the unconfirmed stock-board values, kept in case some SillyGoose units do report them.
-// If detection still misses for a real board, check the raw "USB vid=.. pid=.." text this file
-// surfaces (in fw-detected and the profile-select modal's hint - see fwUsbIdHexString()) and add
-// it here.
-const FEATHER_M0_APP_PIDS = new Set([0x000B, 0x0015, 0x800B]); // SillyGoose - Feather M0 (SAMD21)
-const FEATHER_M4_APP_PIDS = new Set([0x0031, 0x0032, 0x8031]); // SeriousGoose family - Feather M4 (SAMD51)
+// iProduct STRING Electron reads (no "SillyGooseV2"-style descriptor in a plain browser) - but it
+// does expose the numeric USB vendor/product ID. Each board+variant now reports its own unique
+// PID (see platformio.ini's board.build.hwids overrides), found nowhere else - including on a
+// stock Adafruit Feather, which shares our VID (0x239A) but none of these PIDs - so an exact
+// table match identifies the board precisely, no separate variant-picking step needed.
+// Deliberately strict: a PID not in this table (older firmware from before this scheme, a
+// bootloader-mode enumeration, unrelated hardware) always falls through to manual selection -
+// no fuzzy family-only fallback that could guess wrong.
+const USB_PID_BOARD_MAP = {
+    0x5001: { familyId: 'SillyGoose', variant: 'V1' },
+    0x5002: { familyId: 'SillyGoose', variant: 'V2' },
+    0x5003: { familyId: 'SeriousGoose', variant: 'V1' },
+    // Was SeriousGooseGroundV1's own PID before ground-station mode became a GROUND_STATION_MODE_c
+    // runtime toggle on SeriousGoose rather than separate firmware. Kept mapped to SeriousGoose so
+    // an already-deployed, not-yet-re-flashed ground station still auto-detects correctly.
+    0x5004: { familyId: 'SeriousGoose', variant: 'V1' },
+};
 
 // Exposed separately from fwDetectFamilyFromUsbIds() so 03-connection.js's
 // detectAltimeterOnConnect() can include the raw ids in its own hint text too, for whichever
@@ -216,22 +215,19 @@ function fwDetectFamilyFromUsbIds(conn) {
     if (!conn.port) return null;
     let info;
     try { info = conn.port.getInfo(); } catch (e) { return null; }
-    let familyId = null;
-    if (info.usbVendorId === 0x239A) {
-        if (FEATHER_M0_APP_PIDS.has(info.usbProductId)) familyId = 'SillyGoose';
-        else if (FEATHER_M4_APP_PIDS.has(info.usbProductId)) familyId = 'SeriousGoose';
-    }
+    const match = info.usbVendorId === 0x239A ? USB_PID_BOARD_MAP[info.usbProductId] : null;
     const idHex = fwUsbIdHexString(conn);
-    DebugLog.info('firmware', `USB ids: ${idHex}${familyId ? ' -> ' + familyId : ' (no family match)'}`);
-    if (!familyId) {
+    DebugLog.info('firmware', `USB ids: ${idHex}${match ? ' -> ' + match.familyId + ' ' + match.variant : ' (no exact match)'}`);
+    if (!match) {
         if (detEl) detEl.textContent = idHex ? `connected as USB ${idHex} — pick the board manually` : '';
         return null;
     }
-    document.getElementById('fw-family').value = familyId;
+    document.getElementById('fw-family').value = match.familyId;
     fwPopulateVariants();
-    if (detEl) detEl.textContent = `detected ${ALL_BOARD_FAMILIES[familyId].displayName} by USB id (${idHex}) — pick the exact variant manually`;
-    if (ALTIMETER_PROFILES[familyId]) conn.setActiveProfile(familyId);
-    return familyId;
+    document.getElementById('fw-variant').value = match.variant;
+    if (detEl) detEl.textContent = `detected ${ALL_BOARD_FAMILIES[match.familyId].displayName} ${match.variant} by USB id (${idHex})`;
+    if (ALTIMETER_PROFILES[match.familyId]) conn.setActiveProfile(match.familyId);
+    return match.familyId;
 }
 
 // 1200-baud touch: reset the SAMD21/SAMD51 into its UF2 bootloader using the

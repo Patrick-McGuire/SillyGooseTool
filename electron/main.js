@@ -19,20 +19,22 @@ if (process.platform === 'linux') {
   app.commandLine.appendSwitch('no-sandbox');
 }
 
-// USB product descriptor ("SillyGooseV2", "SeriousGooseV1", "SeriousGooseGroundV1") of
-// the most recently selected port. Used by the renderer to auto-detect the board
-// family + variant. This is the compile-time USB iProduct string, NOT the
-// user-writable BOARD_NAME config.
+// USB product descriptor ("SillyGooseV2", "SeriousGooseV1") of the most recently
+// selected port. Used by the renderer to auto-detect the board family + variant.
+// This is the compile-time USB iProduct string, NOT the user-writable BOARD_NAME
+// config.
 let lastBoardDisplayName = '';
 
 // Board families this tool knows how to flash. `prefix` matches both the USB
 // product string and release asset names (platformio.ini's board.build.usb_product
 // is set to "<prefix><variant>", e.g. "SeriousGooseV1"), so adding a new board
-// family only means adding an entry here.
+// family only means adding an entry here. An already-deployed SeriousGooseGroundV1
+// unit (pre-GROUND_STATION_MODE_c firmware, when it was separate firmware rather
+// than a runtime toggle on SeriousGoose) still matches the SeriousGoose entry below,
+// since this is a substring match against the prefix.
 const BOARD_FAMILIES = [
   { id: 'SillyGoose', prefix: 'SillyGoose', variants: [1, 2] },
-  { id: 'SeriousGoose', prefix: 'SeriousGoose', variants: [1] },
-  { id: 'SeriousGooseGround', prefix: 'SeriousGooseGround', variants: [1] }
+  { id: 'SeriousGoose', prefix: 'SeriousGoose', variants: [1] }
 ];
 
 // Adafruit USB vendor ID. All our boards enumerate under Adafruit's VID and set
@@ -367,7 +369,7 @@ async function validateUf2Path(uf2Path) {
 // look like SeriousGooseV1.uf2 / SeriousGooseV1_not_flight_tested.uf2 /
 // SeriousGooseV1_v1.00.uf2, with e.g. SeriousGooseV1Sim.uf2 variants we must
 // exclude (and, since prefixes aren't substrings of each other, no risk of
-// SillyGoose/SeriousGoose/SeriousGooseGround assets cross-matching).
+// SillyGoose/SeriousGoose assets cross-matching).
 function pickAsset(assets, prefix, n) {
   const re = new RegExp(`^${prefix}V${n}(?!Sim)`);
   const a = (assets || []).find((x) => re.test(x.name));

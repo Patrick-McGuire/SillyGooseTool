@@ -113,10 +113,11 @@ class Connection {
         this.activeSeries = [...this.profile.defaultSeries];
         this.configs = this.profile.configs;
         this.fwHeaderCrc = headerCrcFor(this.profile);
-        // True when the connected board is a ground station (see NON_LOGGING_BOARD_FAMILIES[...]
-        // .flightProfileId) relaying another board's telemetry over radio rather than producing its
-        // own flight log - set by detectAltimeterOnConnect(). Changes how processLine() treats
-        // "RADIO_RX"/"GPS" lines (see handleGroundRadioRx/handleGroundGps below).
+        // True when the connected board is acting as a ground station (GROUND_STATION_MODE_c),
+        // relaying another board's telemetry over radio rather than producing its own flight log.
+        // There's no way to ask for this up front - it's set reactively the first time processLine()
+        // sees a "RADIO_RX"/"GPS" line (see handleGroundRadioRx/handleGroundGps below), since a
+        // SeriousGoose board can be in either mode and only its actual output reveals which.
         this.isGroundStation = false;
 
         this.recording = false;
@@ -380,14 +381,14 @@ class Connection {
         const isDataRow = /^\d/.test(line);
         if (!((this.recording || this.streaming) && isDataRow)) logTerm(line);
 
-        // Ground station relay lines (see SeriousGooseGround.cpp) - handled after the generic
-        // terminal echo above (so they're still visible there like every other line - useful for
-        // eyeballing e.g. GPS fix/satellite counts directly) but before the MSG-text matching
-        // below, since they're this connection's actual telemetry, not log text.
-        if (this.isGroundStation) {
-            if (line.startsWith("RADIO_RX\t")) { this.handleGroundRadioRx(line); return; }
-            if (line.startsWith("GPS\t")) { this.handleGroundGps(line); return; }
-        }
+        // Ground station relay lines (GroundStationRelay::tick(), GROUND_STATION_MODE_c) - handled
+        // after the generic terminal echo above (so they're still visible there like every other
+        // line - useful for eyeballing e.g. GPS fix/satellite counts directly) but before the
+        // MSG-text matching below, since they're this connection's actual telemetry, not log text.
+        // Neither prefix is ever emitted outside ground-station mode, so seeing one is itself the
+        // detection signal - there's no separate "ask the board its mode" step.
+        if (line.startsWith("RADIO_RX\t")) { this.isGroundStation = true; this.handleGroundRadioRx(line); return; }
+        if (line.startsWith("GPS\t")) { this.isGroundStation = true; this.handleGroundGps(line); return; }
 
         if (line.includes("Entries in log:")) Telemetry.set('logEntries', line.split(':').pop().trim());
         if (line.includes("Remaining log length:")) Telemetry.set('logRemaining', formatLogTime(line.split(':').pop().trim()));
@@ -435,7 +436,7 @@ class Connection {
         if (line.includes("Erase Complete")) setBusy(false);
     }
 
-    // Decodes one "RADIO_RX\t<rssi>\t<snr>\t<hexPayload>" line (SeriousGooseGround.cpp) into the
+    // Decodes one "RADIO_RX\t<rssi>\t<snr>\t<hexPayload>" line (GroundStationRelay::tick()) into the
     // same tab-row text a direct connection's --streamLog produces, then feeds it through the
     // normal live-telemetry path (handleLiveLine) - Live Stream, Live Map, and the pyro badges
     // (including aux) all work exactly as they do for a direct connection, with no separate code
@@ -480,7 +481,7 @@ class Connection {
     }
 
     // Decodes the ground station's OWN GPS fix - "GPS\t<lat>\t<lon>\t<alt>\t<unixTime>\t<hdop>\t
-    // <vdop>\t<fixQuality>\t<satellites>" (SeriousGooseGround.cpp) - NOT the relayed flight
+    // <vdop>\t<fixQuality>\t<satellites>" (GroundStationRelay::tick()) - NOT the relayed flight
     // computer's position (that comes through RADIO_RX -> handleGroundRadioRx -> the profile's own
     // gpsLat/gpsLon columns, published separately by publishTelemetryFromRow()). Kept under its own
     // Telemetry key since the two are different physical locations; a "ground/pad marker" on the
@@ -518,7 +519,7 @@ class Connection {
         if (!this.binMsgBytes.length) return;
         const nul = this.binMsgBytes.indexOf(0);
         const bytes = nul >= 0 ? this.binMsgBytes.slice(0, nul) : this.binMsgBytes;
-        const str = td.decode(new Uint8Array(bytes)).trim();
+        const str = td.decode(new Uint8Array(bytes)).replace(/\s+$/, '');
         this.binMsgBytes = [];
         if (str) this.processLine(str);
     }
@@ -596,7 +597,9 @@ class Connection {
                             }
                             const nl = buf.indexOf(10); // '\n'
                             if (nl >= 0) {
-                                const line = td.decode(buf.slice(0, nl)).replace(/\r$/, '').trim();
+                                // Trailing-only: a leading .trim() would eat intentional indentation
+                                // (e.g. --help's indented sub-flags).
+                                const line = td.decode(buf.slice(0, nl)).replace(/\s+$/, '');
                                 buf = buf.slice(nl + 1);
                                 if (line) this.processLine(line);
                                 progress = true;
@@ -780,6 +783,12 @@ function showProfileSelectModal(conn, hint) {
 // never for a normal, recognized connect (the previously-always-visible
 // Altimeter dropdown is gone; this replaces it).
 async function detectAltimeterOnConnect(conn) {
+    // Reset on every connect attempt - conn is reused across sessions, and whether this particular
+    // SeriousGoose is actually running in ground-station mode can't be known from its USB identity
+    // alone (GROUND_STATION_MODE_c is a runtime config, not a separate board/firmware). This only
+    // flips true reactively in processLine() once a "RADIO_RX"/"GPS" line is actually seen.
+    conn.isGroundStation = false;
+
     // Desktop reads the USB iProduct string (fwDetectVariant, precise down to variant number);
     // a plain browser only gets numeric vendor/product ids (fwDetectFamilyFromUsbIds) - still
     // enough to tell SillyGoose from SeriousGoose, see that function's comment in 08-firmware.js.
@@ -792,18 +801,8 @@ async function detectAltimeterOnConnect(conn) {
         showProfileSelectModal(conn, idHex
             ? `Couldn't auto-detect the connected board (USB ${idHex}) - pick which altimeter this is.`
             : "Couldn't auto-detect the connected board - pick which altimeter this is.");
-        conn.isGroundStation = false;
         return;
     }
-    // A detected logging profile falls through here with nothing left to do -
-    // fwDetectVariant()/fwDetectFamilyFromUsbIds() already called setActiveProfile() for it.
-    // A detected non-logging family (e.g. SeriousGooseGround) needs its own handling: point the
-    // connection's profile at whichever flight computer it relays for (flightProfileId) so
-    // RADIO_RX payloads decode correctly, and flag it so processLine() treats relayed
-    // "RADIO_RX"/"GPS" lines as live telemetry instead of arbitrary log text. Note:
-    // fwDetectFamilyFromUsbIds() (browser build) can never actually return a non-logging family -
-    // see its own comment - so this only takes effect in the Electron desktop build today.
-    const nonLoggingFamily = NON_LOGGING_BOARD_FAMILIES[familyId];
-    conn.isGroundStation = !!(nonLoggingFamily && nonLoggingFamily.flightProfileId);
-    if (conn.isGroundStation) conn.setActiveProfile(nonLoggingFamily.flightProfileId);
+    // Nothing left to do here - fwDetectVariant()/fwDetectFamilyFromUsbIds() already called
+    // setActiveProfile() for it.
 }

@@ -65,7 +65,8 @@ const SILLY_GOOSE_CONFIGS = [
 const RADIO_CONFIGS = [
     { id: "RADIO_FREQUENCY", label: "Radio Frequency (MHz)" },
     { id: "LORA_SPREADING_FACTOR", label: "LoRa Spreading Factor (5-12)" },
-    { id: "RADIO_TRANSMIT_INTERVAL", label: "Radio TX Interval (milliseconds)" }
+    { id: "RADIO_TRANSMIT_INTERVAL", label: "Radio TX Interval (milliseconds)" },
+    { id: "GROUND_STATION_MODE", label: "Ground Station Mode", type: "checkbox" }
 ];
 
 // Byte layout for a decoded LOG_CONFIG record's payload (see BasicLogger::logConfig() /
@@ -92,6 +93,7 @@ const CONFIG_FIELD_DEFS = [
     { name: "LORA_SPREADING_FACTOR", type: "i32", size: 4, align: 4, radioOnly: true },
     { name: "RADIO_TRANSMIT_INTERVAL", type: "u32", size: 4, align: 4, radioOnly: true },
     { name: "BUZZER_ENABLED", type: "u32", size: 4, align: 4 },
+    { name: "GROUND_STATION_MODE", type: "u32", size: 4, align: 4, radioOnly: true },
 ];
 
 // Computes each field's byte offset the same way firmware's Configuration::assignMemory() does
@@ -323,32 +325,13 @@ const ALTIMETER_PROFILES = {
         configs: [...SILLY_GOOSE_CONFIGS, ...RADIO_CONFIGS],
         configFields: SERIOUS_GOOSE_CONFIG_FIELDS,
         firmwareVariants: [{ value: "V1", label: "SeriousGoose V1" }],
-        // Anchored + negative lookahead so "SeriousGooseGroundV1" (a different
-        // board family) doesn't also match this regex - it starts with the same
-        // "SeriousGoose" substring.
-        usbNameMatch: /^seriousgoose(?!ground)/i
+        // Also matches an old already-deployed SeriousGooseGroundV1 unit (pre-GROUND_STATION_MODE
+        // firmware) - it's the same board family/wire protocol, just running as a ground station,
+        // which is now a runtime mode rather than separate firmware (see GROUND_STATION_MODE_c).
+        usbNameMatch: /^seriousgoose/i
     }
 };
-
-// Board families that don't produce a flight log at all (pure USB/radio bridge) - relevant to the
-// Firmware tab always, and to Offload/Live/Config too for any family with a flightProfileId (see
-// below).
-const NON_LOGGING_BOARD_FAMILIES = {
-    SeriousGooseGround: {
-        id: "SeriousGooseGround",
-        displayName: "SeriousGooseGround",
-        firmwareVariants: [{ value: "V1", label: "SeriousGooseGround V1" }],
-        usbNameMatch: /seriousgooseground/i,
-        // A ground station relays another board's telemetry over radio (SeriousGooseGround.cpp's
-        // "RADIO_RX\t<rssi>\t<snr>\t<hex>" lines) instead of producing its own flight log - this
-        // says which ALTIMETER_PROFILES entry to decode those relayed hex payloads against.
-        // SeriousGooseGround only ever pairs with a SeriousGoose flight computer (same PCB/pinmap
-        // family, see SeriousGooseGround.cpp's own header comment) - a future ground station for a
-        // different flight computer would need its own value here.
-        flightProfileId: "SeriousGoose"
-    }
-};
-const ALL_BOARD_FAMILIES = { ...ALTIMETER_PROFILES, ...NON_LOGGING_BOARD_FAMILIES };
+const ALL_BOARD_FAMILIES = ALTIMETER_PROFILES;
 
 // --- Binary offload protocol (mirrors firmware BasicLogger.h) ---
 const BIN_MAGIC = [0x53, 0x47, 0x42]; // 'SGB'

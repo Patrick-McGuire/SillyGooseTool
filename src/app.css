@@ -278,7 +278,7 @@
         .del-btn:hover { background: #ef4444; color: white; }
 
         #plot-container, #live-plot-container { background-color: var(--card-bg); border-radius: 12px; flex-grow: 1; border: 1px solid var(--border); }
-        #terminal { background: #000; color: #00ff41; font-family: 'Courier New', monospace; padding: 12px; font-size: 0.75rem; overflow-y: auto; border-radius: 8px; height: 140px; border: 1px solid var(--border); line-height: 1.4; }
+        #terminal { background: #000; color: #00ff41; font-family: 'Courier New', monospace; padding: 12px; font-size: 0.75rem; overflow-y: auto; border-radius: 8px; height: 140px; border: 1px solid var(--border); line-height: 1.4; white-space: pre-wrap; }
 
         .stats-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
         .stat-card { background: var(--card-bg); padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); text-align: center; display: flex; flex-direction: column; justify-content: center; min-height: 38px; }
