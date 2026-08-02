@@ -36,6 +36,11 @@
             <button class="tab-btn" id="fw-tab-btn" onclick="openTab('firmware-tab')">Firmware</button>
         </div>
         <div class="header-right">
+            <!-- Only shown while connected to a board actually acting as a ground station
+                 (see conn.isGroundStation - 03-connection.js/09-main.js). Toggles whether typed
+                 CLI commands run on this board directly or get relayed over radio to the flying
+                 board's CLI instead (GroundStationRelay's --send, DebugStreamQueue in firmware). -->
+            <button id="radioForwardBtn" class="btn btn-secondary nav-btn" style="display:none" title="When on, commands typed below are relayed over radio to the flying board instead of running on this ground station">To Radio: OFF</button>
             <div id="busy-loader" class="loader"></div>
             <!-- Browser build only - Electron windows don't get throttled like a backgrounded
                  browser tab does, so this warning doesn't apply there. Hidden by default and

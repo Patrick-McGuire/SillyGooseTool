@@ -30,6 +30,14 @@ function clearTerm() {
     document.getElementById('terminal').innerHTML = '';
 }
 
+const radioForwardBtn = document.getElementById('radioForwardBtn');
+radioForwardBtn.onclick = () => {
+    const conn = ConnectionManager.getActive();
+    conn.forwardToRadio = !conn.forwardToRadio;
+    radioForwardBtn.textContent = `To Radio: ${conn.forwardToRadio ? 'ON' : 'OFF'}`;
+    radioForwardBtn.classList.toggle('active', conn.forwardToRadio);
+};
+
 setInterval(() => {
     if (termBuffer) {
         const t = document.getElementById('terminal');
@@ -37,6 +45,11 @@ setInterval(() => {
         termBuffer = ""; t.scrollTop = t.scrollHeight;
         while (t.childNodes.length > 80) t.removeChild(t.firstChild);
     }
+    // Only meaningful (and only shown) once the connected board has actually revealed itself as
+    // a ground station (conn.isGroundStation flips reactively - see 03-connection.js) - there's
+    // no separate event for that, so this just polls it on the same cadence as the flush above.
+    const conn = ConnectionManager.getActive();
+    radioForwardBtn.style.display = conn.isGroundStation ? '' : 'none';
 }, 100);
 
 function setBusy(val) {

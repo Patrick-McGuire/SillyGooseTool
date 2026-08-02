@@ -81,7 +81,14 @@ async function confirmErase() {
 
 document.getElementById('getAllBtn').onclick = () => {
     const conn = ConnectionManager.getActive();
-    conn.configs.forEach((c, i) => setTimeout(() => conn.sendCmd(`--${c.id}`), i * 150));
+    // Forwarded over radio, each request only actually transmits once GroundStationRelay's
+    // single-slot uplink queue reaches a predicted safe window (roughly one radio cadence apart)
+    // and its response can take several more cadences to fully drain - firing every 150ms (fine
+    // for a direct connection) would overwrite most requests before they ever go out, and the
+    // firmware's own serial-echo of a freshly-typed command can glue onto a still-in-flight
+    // response with no separator. Space these out to give each one time to fully round-trip.
+    const delayMs = conn.forwardToRadio ? 2500 : 150;
+    conn.configs.forEach((c, i) => setTimeout(() => conn.sendCmd(`--${c.id}`), i * delayMs));
 };
 
 // Single delegated listener for every device-facing action button: config

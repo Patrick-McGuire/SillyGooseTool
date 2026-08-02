@@ -119,6 +119,10 @@ class Connection {
         // sees a "RADIO_RX"/"GPS" line (see handleGroundRadioRx/handleGroundGps below), since a
         // SeriousGoose board can be in either mode and only its actual output reveals which.
         this.isGroundStation = false;
+        // When true, sendCmd() wraps typed commands as a --send payload instead of running them
+        // on this (ground station) board directly, relaying them over radio to the flying board's
+        // CLI instead - see the header toggle button (09-main.js) and DebugStreamQueue (firmware).
+        this.forwardToRadio = false;
 
         this.recording = false;
         this.streaming = false;
@@ -340,18 +344,25 @@ class Connection {
         // The Simulation tab holds its own writer on this same stream for the whole run - a
         // second concurrent writer would throw. See Simulation.run() in 10-simulation.js.
         if (this.simActive) return;
+        // Relay to the flying board over radio instead of running locally - wraps the typed
+        // command as this ground station's own --send payload (GroundStationRelay.h), which
+        // tags it RADIO_MSG_CLI_COMMAND and queues it for the next safe uplink window. Quoting
+        // has no escape mechanism on the firmware side (Parser::getString scans for the next
+        // literal '"'), so a command containing one can't round-trip - not worth complicating
+        // this for, since real CLI commands never contain quotes.
+        const wireMsg = this.forwardToRadio ? `--send "${msg}"` : msg;
         if (this.transport === 'bluetooth') {
             if (!this.bleWriter) return;
             setBusy(true);
-            await this.bleWriter.write(new TextEncoder().encode(msg + "\n"));
+            await this.bleWriter.write(new TextEncoder().encode(wireMsg + "\n"));
         } else {
             if (!this.port || !this.port.writable) return;
             setBusy(true);
             const writer = this.port.writable.getWriter();
-            await writer.write(new TextEncoder().encode(msg + "\n"));
+            await writer.write(new TextEncoder().encode(wireMsg + "\n"));
             writer.releaseLock();
         }
-        DebugLog.tx('serial', msg);
+        DebugLog.tx('serial', wireMsg);
         logTerm(`>> ${msg}`, "#38bdf8");
         if (!msg.includes("offload") && !msg.includes("erase") && !msg.includes("streamLog")) setTimeout(() => setBusy(false), 800);
     }
@@ -378,17 +389,17 @@ class Connection {
             if (simSizeMatch) { Simulation.onSizeReport(parseInt(simSizeMatch[1], 10)); return; }
         }
 
-        const isDataRow = /^\d/.test(line);
-        if (!((this.recording || this.streaming) && isDataRow)) logTerm(line);
-
         // Ground station relay lines (GroundStationRelay::tick(), GROUND_STATION_MODE_c) - handled
-        // after the generic terminal echo above (so they're still visible there like every other
-        // line - useful for eyeballing e.g. GPS fix/satellite counts directly) but before the
-        // MSG-text matching below, since they're this connection's actual telemetry, not log text.
-        // Neither prefix is ever emitted outside ground-station mode, so seeing one is itself the
-        // detection signal - there's no separate "ask the board its mode" step.
+        // before the generic terminal echo below and never logged there - at ~1Hz each they'd
+        // otherwise bury actual CLI responses (including ones relayed from the flying board's own
+        // CLI over radio) in constant GPS/telemetry noise. Neither prefix is ever emitted outside
+        // ground-station mode, so seeing one is itself the detection signal - there's no separate
+        // "ask the board its mode" step.
         if (line.startsWith("RADIO_RX\t")) { this.isGroundStation = true; this.handleGroundRadioRx(line); return; }
         if (line.startsWith("GPS\t")) { this.isGroundStation = true; this.handleGroundGps(line); return; }
+
+        const isDataRow = /^\d/.test(line);
+        if (!((this.recording || this.streaming) && isDataRow)) logTerm(line);
 
         if (line.includes("Entries in log:")) Telemetry.set('logEntries', line.split(':').pop().trim());
         if (line.includes("Remaining log length:")) Telemetry.set('logRemaining', formatLogTime(line.split(':').pop().trim()));
@@ -444,11 +455,13 @@ class Connection {
     // a direct connection's --streamLog) - the first relayed packet just turns it on, mirroring the
     // "Streaming enabled" text handling above.
     //
-    // The hex payload is the flight computer's raw LogDataStruct with NO leading id byte
-    // (radio.startTransmit() sends the struct directly - unlike a flash/offload record, which is
-    // wrapped in InternalStruct_s{id, data, crc}). profile.decodeDataRecord() always skips byte 0
-    // (the flash record's id byte) - prepending one dummy byte here reuses that decoder unmodified
-    // rather than forking a second copy of the field-offset logic.
+    // The hex payload is the flight computer's raw LogDataStruct, prefixed with one
+    // RADIO_MSG_TELEMETRY type byte (see Avionics.h/RadioMessageType_e) - CLI responses
+    // (RADIO_MSG_CLI_RESPONSE) never reach this function, GroundStationRelay::tick() forwards
+    // those as raw text directly instead (see its own comment), so every RADIO_RX line here is
+    // guaranteed telemetry. profile.decodeDataRecord() always skips byte 0 (a flash/offload
+    // record's id byte) - prepending one dummy byte after stripping the type byte reuses that
+    // decoder unmodified rather than forking a second copy of the field-offset logic.
     handleGroundRadioRx(line) {
         const parts = line.split('\t');
         if (parts.length < 4) return;
@@ -459,8 +472,9 @@ class Connection {
             DebugLog.warn('ground', `RADIO_RX odd-length hex payload (${hex.length} chars) - dropping`);
             return;
         }
-        const payload = new Uint8Array(hex.length / 2);
-        for (let i = 0; i < payload.length; i++) payload[i] = parseInt(hex.substr(i * 2, 2), 16);
+        const raw = new Uint8Array(hex.length / 2);
+        for (let i = 0; i < raw.length; i++) raw[i] = parseInt(hex.substr(i * 2, 2), 16);
+        const payload = raw.slice(1); // drop the leading RADIO_MSG_TELEMETRY type byte
         if (payload.length !== this.profile.binDataSize) {
             DebugLog.warn('ground', `RADIO_RX payload is ${payload.length} bytes, expected ${this.profile.binDataSize} for ${this.profile.id} - dropping`);
             return;
@@ -788,6 +802,7 @@ async function detectAltimeterOnConnect(conn) {
     // alone (GROUND_STATION_MODE_c is a runtime config, not a separate board/firmware). This only
     // flips true reactively in processLine() once a "RADIO_RX"/"GPS" line is actually seen.
     conn.isGroundStation = false;
+    conn.forwardToRadio = false;
 
     // Desktop reads the USB iProduct string (fwDetectVariant, precise down to variant number);
     // a plain browser only gets numeric vendor/product ids (fwDetectFamilyFromUsbIds) - still
