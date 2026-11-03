@@ -10,6 +10,23 @@ function dismissOnOutsideClick(menu) {
     }), 0);
 }
 
+// Esc or a click on the dimmed backdrop closes the series picker (applying it, its only way out)
+// and the config viewer. Not the altimeter picker - that one needs an answer. The press has to
+// start on the backdrop too, so a text selection dragged out of the box doesn't close it.
+const DISMISSABLE_MODALS = { 'series-modal': () => closeSeriesModal(), 'config-modal': () => closeConfigModal() };
+Object.entries(DISMISSABLE_MODALS).forEach(([id, close]) => {
+    const modal = document.getElementById(id);
+    let pressedBackdrop = false;
+    modal.addEventListener('mousedown', e => { pressedBackdrop = e.target === modal; });
+    modal.addEventListener('click', e => { if (pressedBackdrop && e.target === modal) close(); });
+});
+document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    Object.entries(DISMISSABLE_MODALS).forEach(([id, close]) => {
+        if (document.getElementById(id).style.display === 'flex') close();
+    });
+});
+
 let termBuffer = "";
 let cmdHistory = [];
 let historyIdx = -1;
@@ -54,7 +71,7 @@ setInterval(() => {
 
 function setBusy(val) {
     document.getElementById('busy-loader').style.display = val ? 'block' : 'none';
-    if (!val && ConnectionManager.getActive().port) setSerialEnabled(true);
+    if (!val && isConnected(ConnectionManager.getActive())) setSerialEnabled(true);
 }
 
 // Redraws are already skipped entirely while hidden (see the `!document.hidden`
@@ -74,7 +91,7 @@ function openTab(id) {
     if (event) event.currentTarget.classList.add('active');
     if (id === 'live-map-tab') {
         initLiveMap();
-        setTimeout(() => { if (liveMap) liveMap.invalidateSize(); }, 0);
+        setTimeout(() => { if (liveMap) { liveMap.invalidateSize(); showLiveTrack(); } }, 0);
     }
 }
 
@@ -149,7 +166,7 @@ if (exportLogBtn) exportLogBtn.onclick = () => {
     DebugLog.download({
         'Active profile': conn.profile.id,
         'Log format': conn.logFormat ? `${conn.logFormat.structName} (${conn.logFormat.fields.length} fields, ${conn.logFormat.size} bytes)` : (conn.header.length ? 'names line only' : 'none'),
-        'Connected': !!conn.port,
+        'Connected': isConnected(conn),
         'Streaming': conn.streaming,
         'Flights this session': flightData.length
     });

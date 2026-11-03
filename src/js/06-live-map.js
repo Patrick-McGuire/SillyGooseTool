@@ -110,7 +110,10 @@ const OfflineTileLayer = (typeof L !== 'undefined') ? L.TileLayer.extend({
 }) : null;
 
 let liveMap = null, liveMapTileLayers = null, liveMapActiveTileKey = 'satellite', liveMapMarker = null, liveMapPath = null;
+// Every distinct GPS fix while streaming, recorded whether or not the Live Map tab is open (see
+// recordLiveTrack) - so switching tabs mid-flight doesn't leave a gap in the drawn path.
 const liveMapTrack = [];
+let liveMapCentered = false;
 // Ground station's own position (see Connection.handleGroundGps() in 03-connection.js) - a
 // second, distinct marker from the rocket's, since the two are different physical locations.
 // Created lazily on the first real fix (see updateLiveMapGroundPosition) rather than up front like
@@ -125,6 +128,12 @@ let liveMapGroundMarker = null;
 // it's checkable with nothing plugged in. Real position updates simply
 // overwrite this default once actual GPS data streams in.
 const DEFAULT_MAP_CENTER = [0, 0];
+
+// Touch screens have no right-click - Leaflet raises the same contextmenu event on a long-press.
+if (window.matchMedia && matchMedia('(pointer: coarse)').matches) {
+    const hint = document.querySelector('.map-hint-text');
+    if (hint) hint.textContent = 'Long-press: save offline';
+}
 
 function initLiveMap() {
     if (liveMap || typeof L === 'undefined') return;
@@ -152,7 +161,7 @@ function initLiveMap() {
     // Deliberately NOT the same color as the rocket marker itself (--accent, see .rocket-marker in
     // app.css) - the two need to read as distinct at a glance where the path passes near/under the
     // current marker position.
-    liveMapPath = L.polyline([], { color: '#facc15', weight: 2 }).addTo(liveMap);
+    liveMapPath = L.polyline(liveMapTrack, { color: '#facc15', weight: 2 }).addTo(liveMap);
     liveMapMarker = L.marker(DEFAULT_MAP_CENTER, {
         icon: L.divIcon({ className: 'rocket-marker', html: '&#9650;', iconSize: [20, 20], iconAnchor: [10, 10] })
     }).addTo(liveMap);
@@ -421,11 +430,40 @@ function hasRealFix(fixQuality) {
 function updateLiveMapPosition(lat, lon) {
     if (!liveMap) return;
     liveMapMarker.setLatLng([lat, lon]);
+    liveMapPath.setLatLngs(liveMapTrack);
+    if (!liveMapCentered) { liveMap.setView([lat, lon], 15); liveMapCentered = true; }
+    updateGpsQrCode(lat, lon);
+}
+
+// Draws whatever liveMapTrack gathered while the tab was hidden - called when the tab opens, so
+// the path is there even with no new row arriving (streaming stopped, or a slow ground link).
+function showLiveTrack() {
+    if (!liveMap || !liveMapTrack.length) return;
+    const [lat, lon] = liveMapTrack[liveMapTrack.length - 1];
+    updateLiveMapPosition(lat, lon);
+}
+
+// Starts a fresh path when the user starts a stream, so a bench session's track isn't joined onto
+// the flight's. Not on a reconnect that picks up a running stream - that's the same flight.
+function clearLiveTrack() {
+    liveMapTrack.length = 0;
+    liveMapCentered = false;
+    if (liveMapPath) liveMapPath.setLatLngs(liveMapTrack);
+}
+
+// Appends a row's GPS fix to liveMapTrack. Only when the position changed: rows arrive at up to
+// 100Hz but GPS updates far slower, and pushing every row filled the 5000-point cap in under a
+// minute, dropping the start of the flight's path.
+function recordLiveTrack(conn, row) {
+    const { cols } = layoutForHeader(conn.header);
+    if (cols.gpsLat === undefined || cols.gpsLon === undefined) return;
+    if (!hasRealFix(parseInt(row[cols.gpsFixQuality]))) return;
+    const lat = parseFloat(row[cols.gpsLat]), lon = parseFloat(row[cols.gpsLon]);
+    if (isNaN(lat) || isNaN(lon)) return;
+    const last = liveMapTrack[liveMapTrack.length - 1];
+    if (last && last[0] === lat && last[1] === lon) return;
     liveMapTrack.push([lat, lon]);
     if (liveMapTrack.length > 5000) liveMapTrack.shift();
-    liveMapPath.setLatLngs(liveMapTrack);
-    if (liveMapTrack.length === 1) liveMap.setView([lat, lon], 15);
-    updateGpsQrCode(lat, lon);
 }
 
 // Places/moves the ground station's marker - see liveMapGroundMarker's comment for why this
@@ -581,9 +619,10 @@ const throttledElevationSparkline = throttleByTime(updateElevationSparkline, LIV
 // Map rendering is comparatively expensive, so it only runs while the Live Map
 // tab is actually visible.
 function updateLiveMapIfActive(conn) {
+    if (conn.liveDataBuffer.length === 0) return;
+    recordLiveTrack(conn, conn.liveDataBuffer[conn.liveDataBuffer.length - 1]);
     const tabEl = document.getElementById('live-map-tab');
     if (!tabEl || !tabEl.classList.contains('active') || document.hidden) return;
-    if (conn.liveDataBuffer.length === 0) return;
     initLiveMap();
     // Leaflet sizes itself from the DOM at creation time; the tab may have been
     // hidden (display:none) then, so nudge it once the container has real size.

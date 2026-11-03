@@ -21,9 +21,8 @@ Telemetry.subscribe('offloadProgress', n => {
 // only), messages (conserved logMessage() text - see buildFlightText()), namePrefix.
 function saveFlight(conn, lines, opts = {}) {
     const { bootConfig = "", launchConfig = "", binChunks = null, messages = [], namePrefix = "Flight" } = opts;
-    const flightNum = flightData.length + 1;
     const flight = {
-        id: Date.now(), name: `${namePrefix}_${flightNum}`, raw: [...lines],
+        id: Date.now(), name: nextFlightName(namePrefix), raw: [...lines],
         bootConfig, launchConfig, profileId: conn.profile.id, connectionId: conn.id,
         messages: [...messages],
         // The flight keeps its own column names (and definition, when the board sent one), so
@@ -37,9 +36,17 @@ function saveFlight(conn, lines, opts = {}) {
     DebugLog.info('offload', `saved ${flight.name} (${lines.length} rows, profile ${flight.profileId})`);
     // Mid-offload, only list it: plotting every flight as it arrives blocks the read loop long
     // enough for the board's USB writes to stall, and the firmware abandons the offload then.
-    // The last flight is selected once the offload finishes (see Connection.finishOffload()).
+    // The newest listed flight is selected once the offload finishes (see Connection.finishOffload()).
     if (conn.recording) refreshList();
     else selectFlight(flightData.length - 1);
+}
+
+// "<prefix>_<n>", one past the highest n already listed under that prefix - numbering by list
+// length repeated a name after a delete, and Download All's zip kept only one of the two.
+function nextFlightName(prefix) {
+    const nameRe = new RegExp(`^${prefix}_(\\d+)$`);
+    const used = flightData.map(f => f.name.match(nameRe)).filter(Boolean).map(m => parseInt(m[1], 10));
+    return `${prefix}_${used.length ? Math.max(...used) + 1 : 1}`;
 }
 
 // Column names for rows that arrived with no description at all (no LOG_FORMAT, no names line).
@@ -57,12 +64,26 @@ function flightHasAscentDescent(f) {
     return f._hasAD;
 }
 
+function launchFilterOn() {
+    return !!document.getElementById('filter-flightstate')?.checked;
+}
+
+// The flight to select after an offload: the newest one the launch filter leaves in the list, else
+// the newest overall (refreshList() keeps a selected flight listed regardless of the filter).
+function lastVisibleFlightIndex() {
+    if (launchFilterOn()) {
+        for (let i = flightData.length - 1; i >= 0; i--) if (flightHasAscentDescent(flightData[i])) return i;
+    }
+    return flightData.length - 1;
+}
+
 function refreshList() {
     const list = document.getElementById('flight-list');
-    const filterAD = document.getElementById('filter-flightstate')?.checked;
+    const filterAD = launchFilterOn();
     list.innerHTML = '';
     flightData.forEach((f, i) => {
-        if (filterAD && !flightHasAscentDescent(f)) return;
+        // The selected flight always stays listed, so what's plotted is never missing from the list
+        if (filterAD && i !== selectedIdx && !flightHasAscentDescent(f)) return;
         const item = document.createElement('div');
         item.className = `flight-item ${i === selectedIdx ? 'active' : ''}`;
         item.innerHTML = `<span>${f.name}</span><button class="del-btn" title="Delete" onclick="event.stopPropagation(); deleteLog(${i})">×</button>`;
@@ -70,6 +91,14 @@ function refreshList() {
         item.oncontextmenu = (e) => { e.preventDefault(); showFlightContextMenu(e, i); };
         list.appendChild(item);
     });
+    // Scrolls the list only - scrollIntoView() would also scroll the page, yanking a user reading
+    // the terminal back up on every flight an offload saves
+    const active = list.querySelector('.flight-item.active');
+    if (active) {
+        const listBox = list.getBoundingClientRect(), itemBox = active.getBoundingClientRect();
+        if (itemBox.top < listBox.top) list.scrollTop -= listBox.top - itemBox.top;
+        else if (itemBox.bottom > listBox.bottom) list.scrollTop += itemBox.bottom - listBox.bottom;
+    }
     document.getElementById('downloadZipBtn').disabled = (flightData.length === 0);
     document.getElementById('clearAllBtn').disabled = (flightData.length === 0);
 }
@@ -224,10 +253,32 @@ function zoomToFlightEnabled() {
         try { localStorage.setItem(ZOOM_TO_FLIGHT_KEY, toggle.checked ? '1' : '0'); } catch (e) { /* storage unavailable */ }
         const gd = document.getElementById('plot-container');
         if (!gd || !gd._fullLayout) return;
-        if (toggle.checked && gd._flightWindow) Plotly.relayout(gd, { 'xaxis.range': gd._flightWindow, 'xaxis.autorange': false });
-        else Plotly.relayout(gd, { 'xaxis.autorange': true });
+        const zoomed = toggle.checked && gd._flightWindow;
+        // Labels that fit apart in one view can overlap in the other - re-space them for the new span
+        const annotations = (gd.layout.annotations || []).map(a => ({ ...a }));
+        staggerEventLabels(annotations, zoomed ? gd._flightWindow : gd._fullSpan);
+        if (zoomed) Plotly.relayout(gd, { 'xaxis.range': gd._flightWindow, 'xaxis.autorange': false, annotations });
+        else Plotly.relayout(gd, { 'xaxis.autorange': true, annotations });
     });
 })();
+
+// Event labels closer together than this share of the shown time span print over each other
+// (e.g. ASCENT → DESCENT and DROGUE FIRED, 10ms apart at apogee).
+const EVENT_LABEL_MIN_GAP = 0.015;
+
+// Within each run of too-close labels (annotations are in time order), alternates them to either
+// side of their line, and moves each further pair down the graph - cycling through three heights
+// so a long run never pushes a label below the plot.
+function staggerEventLabels(annotations, span) {
+    const minGap = (span[1] - span[0]) * EVENT_LABEL_MIN_GAP;
+    let runIdx = 0;
+    annotations.forEach((a, i) => {
+        runIdx = (i > 0 && a.x - annotations[i - 1].x < minGap) ? runIdx + 1 : 0;
+        a.xanchor = runIdx % 2 ? 'left' : 'right';
+        a.y = 1 - (Math.floor(runIdx / 2) % 3) * 0.35;
+        a.yanchor = 'top';
+    });
+}
 
 function plotFlight(flight) {
     const { cols, pyros } = layoutForFlight(flight);
@@ -265,6 +316,8 @@ function plotFlight(flight) {
 
     const gd = document.getElementById('plot-container');
     gd._flightWindow = flightTimeWindow(t, states);
+    gd._fullSpan = [t[0], t[t.length - 1]];
+    staggerEventLabels(annotations, zoomToFlightEnabled() && gd._flightWindow ? gd._flightWindow : gd._fullSpan);
     const zoomRange = zoomToFlightEnabled() && gd._flightWindow ? { range: gd._flightWindow, autorange: false } : {};
     Plotly.newPlot(gd, traces, {
         paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
@@ -436,43 +489,63 @@ document.getElementById('file-upload').addEventListener('change', function (e) {
             if (namesLine) loadedHeader = namesLine.split("\t");
         }
 
-        // Keep only data rows. Drops any non-data preamble (column header in either
-        // firmware or website format, "Logger setup" boot marker, stray MSG lines, etc.)
-        // so older raw serial captures load without modification.
-        const lines = allLines.filter(line => /^\d/.test(line));
+        // One flight per boot: a raw serial capture of a whole offload has a "Logger setup" line
+        // before each boot's CONFIG snapshots and rows, the same boundary a live offload splits on
+        // (see Connection.processLine()). This tool's own exports have none, so they stay one flight.
+        // Within each boot, keep only data rows - dropping any non-data preamble (column header in
+        // either firmware or website format, stray MSG: lines, etc.) so raw captures load unmodified.
+        const boots = [];
+        let boot = null;
+        const startBoot = () => { boot = { lines: [], bootConfig: "", launchConfig: "", messages: [] }; boots.push(boot); };
+        startBoot();
+        boot.bootConfig = loadedBootConfig;
+        boot.launchConfig = loadedLaunchConfig;
+        for (const line of allLines) {
+            if (line.includes("Logger setup")) { startBoot(); continue; }
+            if (isConfigLine(line)) {
+                if (!boot.bootConfig) boot.bootConfig = line; else if (!boot.launchConfig) boot.launchConfig = line;
+            } else if (/^\d/.test(line)) {
+                boot.lines.push(line);
+            } else if (line.startsWith("MSG\t")) {
+                // This tool's own exports tag conserved logMessage() text as "MSG\t<rowIndex>\t<text>"
+                // (see buildFlightText()) - recover those so re-loading a saved flight keeps them.
+                const parts = line.split('\t');
+                boot.messages.push({ afterRow: parseInt(parts[1], 10) || 0, text: parts.slice(2).join('\t') });
+            }
+        }
+        // Same minimum as a live offload (Connection.flushRecordedFlight()), so the stubs between real
+        // boots don't each become a flight - unless stubs are all there is, which still import.
+        const withRows = boots.filter(b => b.lines.length);
+        const kept = withRows.some(b => b.lines.length > 5) ? withRows.filter(b => b.lines.length > 5) : withRows;
 
-        // This tool's own exports tag conserved logMessage() text as "MSG\t<rowIndex>\t<text>"
-        // (see buildFlightText()) - recover those here so re-loading a saved flight doesn't
-        // silently drop them again.
-        const messages = allLines.filter(line => line.startsWith("MSG\t")).map(line => {
-            const parts = line.split('\t');
-            return { afterRow: parseInt(parts[1], 10) || 0, text: parts.slice(2).join('\t') };
-        });
-
-        if (lines.length === 0) {
+        if (kept.length === 0) {
             logTerm(`Skipped ${file.name}: no data rows found`, "red");
             document.getElementById('file-upload').value = '';
             return;
         }
 
-        // Create a new flight entry from the loaded data
-        const newFlight = {
-            id: Date.now(),
-            name: file.name.replace('.txt', ''),
-            raw: lines,
-            bootConfig: loadedBootConfig,
-            launchConfig: loadedLaunchConfig,
+        const baseName = file.name.replace('.txt', '');
+        kept.forEach((b, i) => flightData.push({
+            id: Date.now() + i,
+            name: kept.length > 1 ? `${baseName} (boot ${i + 1})` : baseName,
+            raw: b.lines,
+            bootConfig: b.bootConfig,
+            launchConfig: b.launchConfig,
             profileId: ConnectionManager.getActive().profile.id,
-            messages,
-            header: loadedHeader || placeholderHeader(lines),
+            messages: b.messages,
+            header: loadedHeader || placeholderHeader(b.lines),
             format: loadedFormat,
-        };
+        }));
+        // Newest of this file's boots that the launch filter shows (it keeps the selection listed anyway)
+        let pick = flightData.length - 1;
+        if (launchFilterOn()) {
+            for (let i = flightData.length - 1; i >= flightData.length - kept.length; i--) {
+                if (flightHasAscentDescent(flightData[i])) { pick = i; break; }
+            }
+        }
+        selectFlight(pick);
 
-        flightData.push(newFlight);
-        refreshList();
-        selectFlight(flightData.length - 1);
-
-        logTerm(`Loaded local file: ${file.name}`, "#22c55e");
+        logTerm(kept.length > 1 ? `Loaded local file: ${file.name} (${kept.length} boots)` : `Loaded local file: ${file.name}`, "#22c55e");
         // Reset input so you can load the same file again if needed
         document.getElementById('file-upload').value = '';
     };
@@ -483,9 +556,15 @@ document.getElementById('saveFileBtn').onclick = () => downloadFlight(flightData
 
 document.getElementById('downloadZipBtn').onclick = async () => {
     const zip = new JSZip();
+    // Imported files keep their file name, so two can share one - suffix repeats instead of
+    // letting the later one overwrite the earlier in the zip
+    const usedNames = new Set();
     flightData.forEach(f => {
-        zip.file(`${f.name}.txt`, buildFlightText(f));
-        if (f.bin) zip.file(`${f.name}.bin`, f.bin); // exact raw records for binary offloads
+        let name = f.name;
+        for (let n = 2; usedNames.has(name); n++) name = `${f.name} (${n})`;
+        usedNames.add(name);
+        zip.file(`${name}.txt`, buildFlightText(f));
+        if (f.bin) zip.file(`${name}.bin`, f.bin); // exact raw records for binary offloads
     });
     const content = await zip.generateAsync({ type: "blob" });
     const a = document.createElement('a'); a.href = URL.createObjectURL(content);

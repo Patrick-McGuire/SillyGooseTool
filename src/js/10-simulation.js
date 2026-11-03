@@ -25,6 +25,9 @@ const SIM_PREFLIGHT_KEEP_S = 35.0;
 // it. Same values as the Python reference script - see SimulationParser.h's BUFFER_CAPACITY.
 const SIM_HIGH_WATER = 90;
 const SIM_BURST = 2;
+// A board that never sends --simSize isn't running a *Sim build - say so instead of sitting on
+// "Sending... 2 / N" with no explanation (the loop keeps waiting either way).
+const SIM_NO_REPLY_WARN_MS = 3000;
 
 const sgSimTextEncoder = new TextEncoder();
 
@@ -157,8 +160,17 @@ const Simulation = (() => {
             // HIGH_WATER that's a full burst every tick (buffer grows); at/above it we only
             // send once the firmware reports it drained some. BURST is bounded and the
             // firmware can't grow the buffer without our sends, so overflow can't happen.
+            const startedAt = Date.now();
+            let everReported = false;
             while (idx < samples.length && !stopRequested) {
-                if (!sizeReady) { await waitForSizeReport(1000); continue; }
+                if (!sizeReady) {
+                    await waitForSizeReport(1000);
+                    if (!sizeReady && !everReported && Date.now() - startedAt >= SIM_NO_REPLY_WARN_MS) {
+                        simStatus("No reply from the board - is it running a *Sim firmware build? Still waiting...", "#f59e0b");
+                    }
+                    continue;
+                }
+                everReported = true;
                 sizeReady = false;
                 const toSend = Math.max(0, Math.min(SIM_BURST, SIM_HIGH_WATER - latestFwSize, samples.length - idx));
                 if (toSend > 0) {

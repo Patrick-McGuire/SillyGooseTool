@@ -48,6 +48,7 @@ const CONFIG_FIELD_DEFS = [
     { name: "RADIO_TRANSMIT_INTERVAL", type: "u32", size: 4, align: 4, radioOnly: true },
     { name: "BUZZER_ENABLED", type: "u32", size: 4, align: 4 },
     { name: "GROUND_STATION_MODE", type: "u32", size: 4, align: 4, radioOnly: true },
+    { name: "FIRST_STAGE_BURNOUT", type: "u32", size: 4, align: 4 },
 ];
 
 // Computes each field's byte offset the same way firmware's Configuration::assignMemory() does

@@ -137,6 +137,8 @@ class Connection {
 
         this.recording = false;
         this.streaming = false;
+        // Set after a stalled offload so its late rows aren't adopted as a stream (processLine())
+        this.adoptStreamBlocked = false;
         this.simActive = false; // true while the Simulation tab holds the writable stream locked
         this.currentFlightLines = [];
         this.currentFlightBin = [];
@@ -371,7 +373,11 @@ class Connection {
     forceUIDisconnect() {
         this.port = null; this.reader = null; this.bleWriter = null; this.bleDevice = null; this.transport = null;
         this.stopOffloadWatchdog();
+        const wasStreaming = this.streaming;
         setBusy(false); this.recording = false; this.streaming = false;
+        // Without this the Live Graph badge keeps saying "Streaming" and the desktop stream-log
+        // file stays open after the board goes away mid-stream.
+        if (wasStreaming) Telemetry.set('streaming', false);
         setConnectedUI(false);
         // 'offloadProgress' is only otherwise cleared by a clean "Ending Offload"
         // line (see processLine below) - a disconnect mid-offload (failed/hung
@@ -380,7 +386,7 @@ class Connection {
         Telemetry.set('offloadProgress', null);
     }
 
-    // Ends an offload: saves the flight in progress and selects the last one (plotting is skipped
+    // Ends an offload: saves the flight in progress and selects the newest listed one (plotting is skipped
     // while the offload runs, see saveFlight()). `stalled` = the board stopped sending mid-offload.
     finishOffload(stalled) {
         this.stopOffloadWatchdog();
@@ -390,11 +396,14 @@ class Connection {
         setBusy(false);
         if (stalled) {
             this.binaryParseAbandoned = true;
+            // A stalled text offload can resume after the watchdog gave up - its rows must not
+            // be taken for a live stream (see processLine()). Cleared on the next connect/stream.
+            this.adoptStreamBlocked = true;
             logTerm(`Offload stopped early: the board sent nothing for ${OFFLOAD_STALL_MS / 1000} s. ` +
                 'Flights received so far are kept - run the offload again for the rest.', "red");
             DebugLog.warn('offload', 'stalled - board stopped sending mid-offload');
         }
-        if (flightData.length) selectFlight(flightData.length - 1);
+        if (flightData.length) selectFlight(lastVisibleFlightIndex());
     }
 
     startOffloadWatchdog() {
@@ -434,7 +443,10 @@ class Connection {
         }
         DebugLog.tx('serial', wireMsg);
         logTerm(`>> ${msg}`, "#38bdf8");
-        if (!msg.includes("offload") && !msg.includes("erase") && !msg.includes("streamLog")) setTimeout(() => setBusy(false), 800);
+        // Those three stay busy until their own reply clears it (processLine()) - except relayed
+        // over radio, where they're high-bandwidth-only commands the flying board never answers.
+        const clearedByReply = !this.forwardToRadio && (msg.includes("offload") || msg.includes("erase") || msg.includes("streamLog"));
+        if (!clearedByReply) setTimeout(() => setBusy(false), 800);
     }
 
     // Handle one logical text line (from the text stream, or reconstructed from a
@@ -470,16 +482,28 @@ class Connection {
         if (line.startsWith("GPS\t")) { this.isGroundStation = true; this.handleGroundGps(line); return; }
 
         const isDataRow = /^\d/.test(line);
+        // A board keeps streaming across a reconnect (its "Streaming enabled" went to the old
+        // session), so rows matching its log format with nothing else running mean it's streaming.
+        if (isDataRow && !this.recording && !this.streaming && !this.simActive && !this.isGroundStation && !this.adoptStreamBlocked
+            && this.header.length && line.split("\t").length === this.header.length) {
+            this.beginStreaming();
+        }
         if (!((this.recording || this.streaming) && isDataRow)) logTerm(line);
 
         if (line.includes("Entries in log:")) Telemetry.set('logEntries', line.split(':').pop().trim());
         if (line.includes("Remaining log length:")) Telemetry.set('logRemaining', formatLogTime(line.split(':').pop().trim()));
         if (line.includes("Logging")) Telemetry.set('logStatus', line.includes("enabled") ? "ON" : "OFF");
 
-        if (line.includes("Streaming enabled")) { this.streaming = true; this.liveDataBuffer = []; this.streamLogLines = []; this.currentStreamMessages = []; Telemetry.set('streaming', true); }
+        // --streamLog is excluded from sendCmd()'s busy timeout, so its replies clear it: -b/-e
+        // answer "Streaming enabled"/"disabled", a bare --streamLog "Streaming is enabled"/"disabled"
+        if (line.includes("Streaming enabled")) { clearLiveTrack(); this.beginStreaming(); }
         if (line.includes("Streaming disabled")) { this.streaming = false; Telemetry.set('streaming', false); }
+        if (/Streaming (is )?(enabled|disabled)/.test(line)) setBusy(false);
 
-        const setMatch = line.match(/MSG:\s+([A-Z_]+)\s+is set to:\s+(.+)/);
+        // Get replies "is set to", Set replies "has been set to", or "rejected, still set to" /
+        // "is read-only, still set to" - all carry the board's actual value, so a refused Set
+        // doesn't leave the typed one showing.
+        const setMatch = line.match(/MSG:\s+([A-Z_]+)\s+(?:is set to|has been set to|rejected, still set to|is read-only, still set to):\s+(.+)/);
         if (setMatch) {
             Telemetry.set(`cfg.${setMatch[1]}`, setMatch[2].trim());
             setBusy(false);
@@ -527,6 +551,14 @@ class Connection {
         if (line.includes("Erase Complete")) setBusy(false);
     }
 
+    // Starts a fresh streaming session: empty buffers, then the 'streaming' telemetry key, which
+    // starts the stream-log file (see 05-live-stream.js).
+    beginStreaming() {
+        this.adoptStreamBlocked = false;
+        this.streaming = true; this.liveDataBuffer = []; this.streamLogLines = []; this.currentStreamMessages = [];
+        Telemetry.set('streaming', true);
+    }
+
     // Decodes one "RADIO_RX\t<rssi>\t<snr>\t<hexPayload>" line (GroundStationRelay::tick()) into the
     // same tab-row text a direct connection's --streamLog produces, then feeds it through the
     // normal live-telemetry path (handleLiveLine) - Live Stream, Live Map, and the pyro badges
@@ -565,10 +597,7 @@ class Connection {
         }
 
         Telemetry.set('radioLink', { rssi, snr });
-        if (!this.streaming) {
-            this.streaming = true; this.liveDataBuffer = []; this.streamLogLines = []; this.currentStreamMessages = [];
-            Telemetry.set('streaming', true);
-        }
+        if (!this.streaming) this.beginStreaming();
         try {
             handleLiveLine(this, decodeLogRecord(this.logFormat, payload, 0).join('\t'), { rssi, snr });
         } catch (e) {
@@ -752,6 +781,7 @@ class Connection {
                 // stays stuck forever with no way to recover except reloading
                 // the app - this makes the failure visible and recoverable.
                 DebugLog.error('connection', 'read loop error: ' + e.message);
+                logTerm("Board disconnected.", "red");
                 this.forceUIDisconnect();
                 break;
             } finally { if (this.reader && this.transport !== 'bluetooth') { this.reader.releaseLock(); this.reader = null; } }
@@ -782,6 +812,11 @@ function setConnectedUI(connected) {
 function setConnectButtonsDisabled(disabled) {
     document.getElementById('connectBtn').disabled = disabled;
     document.getElementById('connectBluetoothBtn').disabled = disabled;
+}
+
+// True while a board is connected over either transport - a Bluetooth link has no port.
+function isConnected(conn) {
+    return !!(conn.port || conn.bleWriter);
 }
 
 // Column lookups (LIVE_FIELDS indices + pyro channels) for a saved flight's own header.
@@ -889,6 +924,7 @@ async function detectAltimeterOnConnect(conn) {
     // flips true reactively in processLine() once a "RADIO_RX"/"GPS" line is actually seen.
     conn.isGroundStation = false;
     conn.forwardToRadio = false;
+    conn.adoptStreamBlocked = false;
 
     // Desktop reads the USB iProduct string (fwDetectVariant, precise down to variant number);
     // a plain browser only gets numeric vendor/product ids (fwDetectFamilyFromUsbIds) - still

@@ -278,9 +278,11 @@ async function fwAdoptPort(conn, p) {
     // was flashed via double-tap while disconnected), fall through and try.
     if (fwAppPid && info.usbProductId && info.usbProductId !== fwAppPid) return false;
     try {
-        await p.open({ baudRate: 115200 });
+        // Same buffer as Connection.connect() - the 255-byte default can't absorb a binary offload
+        await p.open({ baudRate: 115200, bufferSize: SERIAL_RX_BUFFER_BYTES });
     } catch (e) { return false; }                          // not ready / wrong device — caller keeps trying
     conn.port = p;
+    conn.transport = 'usb';
     document.getElementById('connectBtn').style.display = 'none';
     document.getElementById('disconnectBtn').style.display = 'block';
     setSerialEnabled(true);

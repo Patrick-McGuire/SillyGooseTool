@@ -152,11 +152,13 @@
         .series-list { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 20px 0; }
         .series-opt { font-size: 0.85rem; display: flex; align-items: center; gap: 10px; cursor: pointer; color: #cbd5e1; }
 
-        #flight-list { flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: #0f172a; min-height: 150px; }
+        #flight-list { flex-grow: 1; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: #0f172a; min-height: 80px; }
 
         /* Offload tab: session-flight list lives here now, scoped to this tab instead of the global sidebar */
         .offload-layout { display: flex; gap: 12px; flex-grow: 1; min-height: 0; }
-        .offload-sidebar { width: 220px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; min-height: 0; }
+        /* overflow-y: in a window too short for even the list's 80px floor plus the four buttons,
+           the sidebar scrolls instead of running its buttons into the terminal below. */
+        .offload-sidebar { width: 220px; flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow-y: auto; }
         .offload-sidebar-title { font-size: 0.8rem; font-weight: 600; color: #cbd5e1; text-align: center; padding: 4px 0; }
         .offload-main { flex-grow: 1; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 
@@ -165,6 +167,12 @@
         .live-map-container { flex-grow: 1; border-radius: 12px; border: 1px solid var(--border); background: var(--card-bg); position: relative; min-width: 0; }
         #live-map { width: 100%; height: 100%; border-radius: 12px; }
         .leaflet-container { border-radius: 12px; background: #0b1220; font-family: 'Inter', sans-serif; }
+        /* Leaflet's own layers icon is a separate images/layers.png that the single-file build
+           doesn't ship, which left the base-layer toggle a blank white square - inline one instead. */
+        .leaflet-control-layers-toggle, .leaflet-retina .leaflet-control-layers-toggle {
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 26'%3E%3Cg fill='none' stroke='%23334155' stroke-width='1.6' stroke-linejoin='round'%3E%3Cpath d='M13 4 23 9 13 14 3 9z' fill='%2394a3b8'/%3E%3Cpath d='M3 13l10 5 10-5'/%3E%3Cpath d='M3 17l10 5 10-5'/%3E%3C/g%3E%3C/svg%3E");
+            background-size: 26px 26px;
+        }
 
         .qr-overlay {
             position: absolute; right: 10px; bottom: 10px; z-index: 450;
@@ -281,7 +289,14 @@
         #plot-container, #live-plot-container { background-color: var(--card-bg); border-radius: 12px; flex-grow: 1; border: 1px solid var(--border); }
         /* Offload graph + a small toggle floating in its top-left corner (the plot's top margin
            is empty there - the legend sits top-right), so it costs no screen space. */
-        .plot-wrap { position: relative; flex-grow: 1; display: flex; flex-direction: column; min-height: 0; }
+        .plot-wrap { position: relative; flex-grow: 1; display: flex; flex-direction: column; min-height: 150px; }
+        /* Pinned to the wrap's box: as a plain flex item it had no height of its own when Plotly
+           first drew, so Plotly fell back to its fixed 450px default and overran the terminal.
+           The wrap's min-height keeps a short window from squeezing the graph to nothing, and the
+           tab's own floor (stat cards + that graph) makes such a window scroll instead of the graph
+           spilling over the terminal. */
+        #offload-tab { min-height: 300px; }
+        .plot-wrap > #plot-container { position: absolute; inset: 0; }
         .plot-overlay-toggle {
             position: absolute; top: 10px; left: 14px; z-index: 5;
             display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none;
@@ -290,7 +305,7 @@
         }
         .plot-overlay-toggle:hover { color: #f8fafc; border-color: #94a3b8; }
         .plot-overlay-toggle input { margin: 0; accent-color: var(--accent); cursor: pointer; }
-        #terminal { background: #000; color: #00ff41; font-family: 'Courier New', monospace; padding: 12px; font-size: 0.75rem; overflow-y: auto; border-radius: 8px; height: 140px; border: 1px solid var(--border); line-height: 1.4; white-space: pre-wrap; }
+        #terminal { background: #000; color: #00ff41; font-family: 'Courier New', monospace; padding: 12px; font-size: 0.75rem; overflow-y: auto; border-radius: 8px; height: 140px; flex-shrink: 0; border: 1px solid var(--border); line-height: 1.4; white-space: pre-wrap; }
 
         .stats-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
         .stat-card { background: var(--card-bg); padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); text-align: center; display: flex; flex-direction: column; justify-content: center; min-height: 38px; }

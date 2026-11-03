@@ -112,6 +112,14 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; align-i
 }
 .config-table-actions { display: flex; gap: 5px; white-space: nowrap; }
 .config-table-actions .btn { width: 50px; height: 32px; padding: 2px; font-size: var(--fs-xs); }
+/* System Configuration rows as two lines - the setting's name, then its value with Get/Set beside
+   it - since name + value + buttons on one line ran ~490px wide, leaving Get/Set off-screen behind
+   a sideways scroll. Scoped to #config-fields: the flight config viewer reuses .config-table. */
+#config-fields .config-table thead { display: none; }
+#config-fields .config-table tr { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
+#config-fields .config-table td { border-bottom: none; }
+#config-fields .config-table-label { grid-column: 1 / -1; white-space: normal; padding-bottom: 2px; }
+#config-fields .config-table-input input { width: 100%; }
 
 .btn {
     background-color: var(--accent); color: var(--bg-color); border: none;
@@ -145,13 +153,11 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; align-i
 .streaming-badge.streaming-on { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
 .streaming-badge.streaming-off { background: #334155; color: #94a3b8; }
 
-.cmd-row-btn { width: 90px; flex-shrink: 0; }
-/* #cmd-input has inline flex-grow:1 (see body.html) but no min-width, so its
-   browser-default text-input intrinsic min-width (~170-190px in Chrome)
-   wins over the ~70px actually left after 3 .cmd-row-btn siblings - same
-   flex min-width:auto gotcha as .tabs/#config-fields above, just without an
-   overflow-x:auto anywhere in this row to (partially) mask it. */
-#cmd-input { min-width: 0; }
+/* Command box on its own full-width line, its three buttons sharing the line below - beside them
+   it only got the ~55px left over on a phone. */
+.cmd-row { flex-wrap: wrap; }
+#cmd-input { flex-basis: 100%; min-width: 0; }
+.cmd-row-btn { flex: 1 1 0; width: auto; }
 
 #series-modal, #config-modal, #profile-modal {
     display: none; position: fixed; z-index: 2000; left: 0; top: 0; width: 100%; height: 100%;
@@ -179,6 +185,11 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; align-i
 .live-map-container { height: 55vh; min-height: 280px; border-radius: 12px; border: 1px solid var(--border); background: var(--card-bg); position: relative; }
 #live-map { width: 100%; height: 100%; border-radius: 12px; }
 .leaflet-container { border-radius: 12px; background: #0b1220; font-family: 'Inter', sans-serif; }
+/* Same inlined layers icon as app.css - Leaflet's images/layers.png isn't in the build. */
+.leaflet-control-layers-toggle, .leaflet-retina .leaflet-control-layers-toggle {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 26'%3E%3Cg fill='none' stroke='%23334155' stroke-width='1.6' stroke-linejoin='round'%3E%3Cpath d='M13 4 23 9 13 14 3 9z' fill='%2394a3b8'/%3E%3Cpath d='M3 13l10 5 10-5'/%3E%3Cpath d='M3 17l10 5 10-5'/%3E%3C/g%3E%3C/svg%3E");
+    background-size: 26px 26px;
+}
 
 .qr-overlay {
     position: absolute; right: 8px; bottom: 8px; z-index: 450;
