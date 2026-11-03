@@ -35,8 +35,11 @@ function saveFlight(conn, lines, opts = {}) {
     if (binChunks && binChunks.length) flight.bin = concatChunks(binChunks);
     flightData.push(flight);
     DebugLog.info('offload', `saved ${flight.name} (${lines.length} rows, profile ${flight.profileId})`);
-    refreshList();
-    selectFlight(flightData.length - 1);
+    // Mid-offload, only list it: plotting every flight as it arrives blocks the read loop long
+    // enough for the board's USB writes to stall, and the firmware abandons the offload then.
+    // The last flight is selected once the offload finishes (see Connection.finishOffload()).
+    if (conn.recording) refreshList();
+    else selectFlight(flightData.length - 1);
 }
 
 // Column names for rows that arrived with no description at all (no LOG_FORMAT, no names line).
@@ -186,6 +189,46 @@ function selectFlight(i) {
     document.getElementById('saveFileBtn').disabled = false;
 }
 
+// "Zoom to flight" toggle (floats over the graph's top-left corner, on by default): x range from a
+// bit before the flight starts to a bit after it ends. Start = the first ASCENT/DESCENT sample (the
+// log's own start when it opens mid-flight, e.g. after a reboot); end = the first POST_FLIGHT after
+// that, else the last ASCENT/DESCENT sample (a log cut off mid-descent). A log with no flight
+// states at all keeps its full range. Remembered per viewer.
+const FLIGHT_ZOOM_BEFORE_S = 5;
+const FLIGHT_ZOOM_AFTER_S = 10;
+const ZOOM_TO_FLIGHT_KEY = 'sg.zoomToFlight';
+const IN_FLIGHT_STATES = new Set([1, 2]); // ASCENT, DESCENT
+const LANDED_STATE = 3; // POST_FLIGHT
+
+function flightTimeWindow(t, states) {
+    const start = states.findIndex(s => IN_FLIGHT_STATES.has(s));
+    if (start < 0 || !t.length) return null;
+    const landed = states.findIndex((s, i) => i > start && s === LANDED_STATE);
+    let end = landed;
+    if (end < 0) for (let i = states.length - 1; i >= start; i--) if (IN_FLIGHT_STATES.has(states[i])) { end = i; break; }
+    const from = Math.max(t[0], t[start] - FLIGHT_ZOOM_BEFORE_S);
+    const to = Math.min(t[t.length - 1], t[end] + FLIGHT_ZOOM_AFTER_S);
+    return to > from ? [from, to] : null;
+}
+
+function zoomToFlightEnabled() {
+    return document.getElementById('zoomToFlightToggle')?.checked ?? false;
+}
+
+(function setUpZoomToFlightToggle() {
+    const toggle = document.getElementById('zoomToFlightToggle');
+    if (!toggle) return;
+    toggle.checked = true;
+    try { if (localStorage.getItem(ZOOM_TO_FLIGHT_KEY) === '0') toggle.checked = false; } catch (e) { /* storage unavailable */ }
+    toggle.addEventListener('change', () => {
+        try { localStorage.setItem(ZOOM_TO_FLIGHT_KEY, toggle.checked ? '1' : '0'); } catch (e) { /* storage unavailable */ }
+        const gd = document.getElementById('plot-container');
+        if (!gd || !gd._fullLayout) return;
+        if (toggle.checked && gd._flightWindow) Plotly.relayout(gd, { 'xaxis.range': gd._flightWindow, 'xaxis.autorange': false });
+        else Plotly.relayout(gd, { 'xaxis.autorange': true });
+    });
+})();
+
 function plotFlight(flight) {
     const { cols, pyros } = layoutForFlight(flight);
     const header = flight.header;
@@ -221,10 +264,12 @@ function plotFlight(flight) {
     }
 
     const gd = document.getElementById('plot-container');
+    gd._flightWindow = flightTimeWindow(t, states);
+    const zoomRange = zoomToFlightEnabled() && gd._flightWindow ? { range: gd._flightWindow, autorange: false } : {};
     Plotly.newPlot(gd, traces, {
         paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
         font: { color: '#f8fafc' }, margin: { t: 60, r: 20, l: 50, b: 40 },
-        hovermode: 'x', xaxis: { title: 'Time (s)', gridcolor: '#334155', showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikedash: 'dash', spikecolor: '#94a3b8', spikethickness: 1 },
+        hovermode: 'x', xaxis: { title: 'Time (s)', gridcolor: '#334155', showspikes: true, spikemode: 'across', spikesnap: 'cursor', spikedash: 'dash', spikecolor: '#94a3b8', spikethickness: 1, ...zoomRange },
         yaxis: { title: 'Data', gridcolor: '#334155' }, shapes, annotations,
         showlegend: true,
         legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'right', x: 1, font: { size: 10, color: '#94a3b8' } }

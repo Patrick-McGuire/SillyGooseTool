@@ -279,6 +279,17 @@
         .del-btn:hover { background: #ef4444; color: white; }
 
         #plot-container, #live-plot-container { background-color: var(--card-bg); border-radius: 12px; flex-grow: 1; border: 1px solid var(--border); }
+        /* Offload graph + a small toggle floating in its top-left corner (the plot's top margin
+           is empty there - the legend sits top-right), so it costs no screen space. */
+        .plot-wrap { position: relative; flex-grow: 1; display: flex; flex-direction: column; min-height: 0; }
+        .plot-overlay-toggle {
+            position: absolute; top: 10px; left: 14px; z-index: 5;
+            display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none;
+            font-size: 0.72rem; color: #94a3b8; padding: 3px 8px; border-radius: 6px;
+            background: rgba(15, 23, 42, 0.7); border: 1px solid var(--border);
+        }
+        .plot-overlay-toggle:hover { color: #f8fafc; border-color: #94a3b8; }
+        .plot-overlay-toggle input { margin: 0; accent-color: var(--accent); cursor: pointer; }
         #terminal { background: #000; color: #00ff41; font-family: 'Courier New', monospace; padding: 12px; font-size: 0.75rem; overflow-y: auto; border-radius: 8px; height: 140px; border: 1px solid var(--border); line-height: 1.4; white-space: pre-wrap; }
 
         .stats-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }

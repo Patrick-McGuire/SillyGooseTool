@@ -276,6 +276,14 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; align-i
    parent's fixed viewport-height row to stretch them - needed now that
    they're stacked in a normally-flowing (not height-locked) column. */
 #plot-container, #live-plot-container { background-color: var(--card-bg); border-radius: 12px; border: 1px solid var(--border); min-height: 340px; }
+.plot-wrap { position: relative; }
+.plot-overlay-toggle {
+    position: absolute; top: 8px; left: 10px; z-index: 5;
+    display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
+    font-size: 0.8rem; color: #94a3b8; padding: 5px 10px; border-radius: 8px;
+    background: rgba(15, 23, 42, 0.75); border: 1px solid var(--border);
+}
+.plot-overlay-toggle input { margin: 0; width: 18px; height: 18px; accent-color: var(--accent); }
 #terminal { background: #000; color: #00ff41; font-family: 'Courier New', monospace; padding: 10px; font-size: 0.75rem; overflow-y: auto; -webkit-overflow-scrolling: touch; border-radius: 8px; height: 140px; border: 1px solid var(--border); line-height: 1.4; white-space: pre-wrap; }
 
 /* Stat grids: 2 columns instead of desktop's 6 (or 1fr/2fr/1fr for Offload) -

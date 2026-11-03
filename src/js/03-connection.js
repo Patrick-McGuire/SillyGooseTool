@@ -10,6 +10,13 @@ const BLE_NOTIFY_UUID = '0000fff1-0000-1000-8000-00805f9b34fb';
 const BLE_WRITE_UUID = '0000fff2-0000-1000-8000-00805f9b34fb';
 const BLE_WRITE_CHUNK_SIZE = 20;
 
+// Web Serial receive buffer (see Connection.connect()).
+const SERIAL_RX_BUFFER_BYTES = 8 * 1024 * 1024;
+// An offload that goes this long with no bytes is over: the firmware gives up on a binary
+// offload when the host stops draining USB, and does so without sending its end-of-log
+// terminator or "Ending Offload", so the parser would otherwise wait in binary mode forever.
+const OFFLOAD_STALL_MS = 3000;
+
 // Adapts a BLE notify characteristic to the ReadableStreamDefaultReader
 // shape ({read, cancel, releaseLock}) so Connection.readLoop() doesn't need
 // to know which transport it's reading from.
@@ -239,11 +246,10 @@ class Connection {
                 }
             }
             // Bump the browser/OS-side receive buffer well past the 255-byte default. A
-            // binary offload streams continuously with no flow control, so a larger
-            // buffer gives the host driver much more slack to absorb a burst while the
-            // JS thread is briefly busy (GC, rendering, etc.) before the firmware's own
-            // USB TX buffer backs up.
-            await this.port.open({ baudRate: 115200, bufferSize: 16384 });
+            // binary offload streams continuously with no flow control, and the firmware
+            // abandons it after only tens of milliseconds of USB backpressure - so the buffer
+            // has to absorb whole seconds of the JS thread being busy (GC, rendering, etc.).
+            await this.port.open({ baudRate: 115200, bufferSize: SERIAL_RX_BUFFER_BYTES });
             DebugLog.info('connection', 'port opened');
             this.transport = 'usb';
             setConnectedUI(true);
@@ -364,6 +370,7 @@ class Connection {
 
     forceUIDisconnect() {
         this.port = null; this.reader = null; this.bleWriter = null; this.bleDevice = null; this.transport = null;
+        this.stopOffloadWatchdog();
         setBusy(false); this.recording = false; this.streaming = false;
         setConnectedUI(false);
         // 'offloadProgress' is only otherwise cleared by a clean "Ending Offload"
@@ -371,6 +378,36 @@ class Connection {
         // device, dropped USB, manual disconnect) would otherwise leave the
         // Offload button's label stuck on its last "N rows…" count forever.
         Telemetry.set('offloadProgress', null);
+    }
+
+    // Ends an offload: saves the flight in progress and selects the last one (plotting is skipped
+    // while the offload runs, see saveFlight()). `stalled` = the board stopped sending mid-offload.
+    finishOffload(stalled) {
+        this.stopOffloadWatchdog();
+        this.flushRecordedFlight();
+        this.recording = false;
+        Telemetry.set('offloadProgress', null);
+        setBusy(false);
+        if (stalled) {
+            this.binaryParseAbandoned = true;
+            logTerm(`Offload stopped early: the board sent nothing for ${OFFLOAD_STALL_MS / 1000} s. ` +
+                'Flights received so far are kept - run the offload again for the rest.', "red");
+            DebugLog.warn('offload', 'stalled - board stopped sending mid-offload');
+        }
+        if (flightData.length) selectFlight(flightData.length - 1);
+    }
+
+    startOffloadWatchdog() {
+        this.stopOffloadWatchdog();
+        this.lastRxAt = Date.now();
+        this.offloadWatchdog = setInterval(() => {
+            if (!this.recording) { this.stopOffloadWatchdog(); return; }
+            if (Date.now() - this.lastRxAt >= OFFLOAD_STALL_MS) this.finishOffload(true);
+        }, 500);
+    }
+
+    stopOffloadWatchdog() {
+        if (this.offloadWatchdog) { clearInterval(this.offloadWatchdog); this.offloadWatchdog = null; }
     }
 
     async sendCmd(msg) {
@@ -453,6 +490,7 @@ class Connection {
             this.currentBootConfig = ""; this.currentLaunchConfig = ""; this.currentFlightMessages = [];
             Telemetry.set('offloadProgress', 0);
             setBusy(true);
+            this.startOffloadWatchdog();
             return;
         }
 
@@ -468,7 +506,7 @@ class Connection {
 
         if (this.recording) {
             if (line.includes("Logger setup")) { this.flushRecordedFlight(); return; }
-            if (line.includes("Ending Offload")) { this.flushRecordedFlight(); this.recording = false; Telemetry.set('offloadProgress', null); setBusy(false); return; }
+            if (line.includes("Ending Offload")) { this.finishOffload(false); return; }
             if (line.startsWith("CONFIG\t") || line.startsWith("CONFIG ")) {
                 if (!this.currentBootConfig) this.currentBootConfig = line; else this.currentLaunchConfig = line;
                 return;
@@ -630,6 +668,14 @@ class Connection {
                 while (this.keepReading) {
                     const { value, done } = await this.reader.read();
                     if (done) break;
+                    // After a stalled offload (finishOffload(true)) the parser may still be in a
+                    // binary mode, holding a partial record and the firmware's abort message:
+                    // resume at that message's text, or drop the leftover bytes.
+                    if (this.binaryParseAbandoned) {
+                        this.binaryParseAbandoned = false;
+                        if (mode !== 'text') { mode = 'text'; buf = textAfterAbandonedBinary(buf); }
+                    }
+                    this.lastRxAt = Date.now();
                     buf = concatU8(buf, value);
 
                     let progress = true;
@@ -779,6 +825,13 @@ function formatLogTime(seconds) {
 const td = new TextDecoder();
 function concatU8(a, b) { const r = new Uint8Array(a.length + b.length); r.set(a); r.set(b, a.length); return r; }
 function concatChunks(chunks) { let n = 0; for (const c of chunks) n += c.length; const r = new Uint8Array(n); let o = 0; for (const c of chunks) { r.set(c, o); o += c.length; } return r; }
+// The bytes from the first DebugStream prefix ("ERROR:", "WARN:", "MSG:") on, or none.
+function textAfterAbandonedBinary(buf) {
+    const text = td.decode(buf);
+    const starts = ['ERROR:', 'WARN:', 'MSG:'].map(p => text.indexOf(p)).filter(i => i >= 0);
+    if (!starts.length) return new Uint8Array(0);
+    return new TextEncoder().encode(text.slice(Math.min(...starts)));
+}
 
 // --- ConnectionManager -------------------------------------------------------
 // Holds every live Connection (see its own multi-device note above). Exactly

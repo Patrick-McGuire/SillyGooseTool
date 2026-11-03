@@ -91,7 +91,12 @@
                 <div id="hover-dashboard" class="hover-dashboard">
                     <div style="color: #64748b; font-style: italic;">Hover over the chart to see data...</div>
                 </div>
-                <div id="plot-container"></div>
+                <div class="plot-wrap">
+                    <div id="plot-container"></div>
+                    <label class="plot-overlay-toggle" title="Zoom the graph to just before launch through just after landing">
+                        <input type="checkbox" id="zoomToFlightToggle"> Zoom to flight
+                    </label>
+                </div>
             </div>
         </div>
     </div>
