@@ -93,14 +93,12 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; align-i
 .control-readout span { color: white; font-weight: 600; }
 
 /* #config-fields is the container JS injects the <table class="config-table">
-   into (see 07-config-controls.js) -- no separate wrapper div to target, so
-   the horizontal-scroll safety net (mirrors the sibling "ars" tool's
-   .log-table-wrap) goes directly on it, so a long label + input + Set/Get
-   pair can never clip/overflow the page even on the narrowest supported
-   phone. min-width:0 for the same reason as .tabs above: a flex item (this
-   is one, inside .config-main's column flex) defaults to min-width:auto,
-   which otherwise stops overflow-x:auto from ever actually kicking in below
-   the content's intrinsic width. */
+   into (see 07-config-controls.js). Its rows are laid out to fit the phone
+   (see the two-line rows below); overflow-x:auto stays as a safety net for
+   an unusually long value. min-width:0 for the same reason as .tabs above: a
+   flex item (this is one, inside .config-main's column flex) defaults to
+   min-width:auto, which otherwise stops overflow-x:auto from ever actually
+   kicking in below the content's intrinsic width. */
 #config-fields { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 6px; min-width: 0; }
 .config-table { width: 100%; border-collapse: collapse; font-size: var(--fs-md); }
 .config-table th { text-align: left; font-size: var(--fs-xs); color: #94a3b8; text-transform: uppercase; padding: 4px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -119,7 +117,7 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; align-i
 #config-fields .config-table tr { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
 #config-fields .config-table td { border-bottom: none; }
 #config-fields .config-table-label { grid-column: 1 / -1; white-space: normal; padding-bottom: 2px; }
-#config-fields .config-table-input input { width: 100%; }
+#config-fields .config-table-input input[type="text"] { width: 100%; }
 
 .btn {
     background-color: var(--accent); color: var(--bg-color); border: none;

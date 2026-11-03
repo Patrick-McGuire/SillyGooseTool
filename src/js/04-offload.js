@@ -68,11 +68,12 @@ function launchFilterOn() {
     return !!document.getElementById('filter-flightstate')?.checked;
 }
 
-// The flight to select after an offload: the newest one the launch filter leaves in the list, else
-// the newest overall (refreshList() keeps a selected flight listed regardless of the filter).
-function lastVisibleFlightIndex() {
+// The flight to select after an offload or import added flights from index `from` on: the newest of
+// them the launch filter leaves in the list, else the newest overall (refreshList() keeps a selected
+// flight listed regardless of the filter).
+function lastVisibleFlightIndex(from) {
     if (launchFilterOn()) {
-        for (let i = flightData.length - 1; i >= 0; i--) if (flightHasAscentDescent(flightData[i])) return i;
+        for (let i = flightData.length - 1; i >= from; i--) if (flightHasAscentDescent(flightData[i])) return i;
     }
     return flightData.length - 1;
 }
@@ -91,16 +92,19 @@ function refreshList() {
         item.oncontextmenu = (e) => { e.preventDefault(); showFlightContextMenu(e, i); };
         list.appendChild(item);
     });
-    // Scrolls the list only - scrollIntoView() would also scroll the page, yanking a user reading
-    // the terminal back up on every flight an offload saves
-    const active = list.querySelector('.flight-item.active');
-    if (active) {
-        const listBox = list.getBoundingClientRect(), itemBox = active.getBoundingClientRect();
-        if (itemBox.top < listBox.top) list.scrollTop -= listBox.top - itemBox.top;
-        else if (itemBox.bottom > listBox.bottom) list.scrollTop += itemBox.bottom - listBox.bottom;
-    }
     document.getElementById('downloadZipBtn').disabled = (flightData.length === 0);
     document.getElementById('clearAllBtn').disabled = (flightData.length === 0);
+}
+
+// Brings the selected flight into view within the list only - scrollIntoView() would also scroll the
+// page. Called on a new selection, not every refreshList(), so the list stays where the user put it.
+function scrollSelectedFlightIntoList() {
+    const list = document.getElementById('flight-list');
+    const active = list.querySelector('.flight-item.active');
+    if (!active) return;
+    const listBox = list.getBoundingClientRect(), itemBox = active.getBoundingClientRect();
+    if (itemBox.top < listBox.top) list.scrollTop -= listBox.top - itemBox.top;
+    else if (itemBox.bottom > listBox.bottom) list.scrollTop += itemBox.bottom - listBox.bottom;
 }
 
 // Right-click menu on a flight-list row: quick actions without needing to
@@ -213,7 +217,7 @@ function closeConfigModal() {
 }
 
 function selectFlight(i) {
-    selectedIdx = i; refreshList();
+    selectedIdx = i; refreshList(); scrollSelectedFlightIntoList();
     plotFlight(flightData[i]);
     document.getElementById('saveFileBtn').disabled = false;
 }
@@ -501,16 +505,19 @@ document.getElementById('file-upload').addEventListener('change', function (e) {
         boot.bootConfig = loadedBootConfig;
         boot.launchConfig = loadedLaunchConfig;
         for (const line of allLines) {
-            if (line.includes("Logger setup")) { startBoot(); continue; }
-            if (isConfigLine(line)) {
-                if (!boot.bootConfig) boot.bootConfig = line; else if (!boot.launchConfig) boot.launchConfig = line;
-            } else if (/^\d/.test(line)) {
-                boot.lines.push(line);
-            } else if (line.startsWith("MSG\t")) {
+            // Checked before the boot boundary, so a conserved message mentioning "Logger setup"
+            // stays a message instead of splitting the flight
+            if (line.startsWith("MSG\t")) {
                 // This tool's own exports tag conserved logMessage() text as "MSG\t<rowIndex>\t<text>"
                 // (see buildFlightText()) - recover those so re-loading a saved flight keeps them.
                 const parts = line.split('\t');
                 boot.messages.push({ afterRow: parseInt(parts[1], 10) || 0, text: parts.slice(2).join('\t') });
+            } else if (line.includes("Logger setup")) {
+                startBoot();
+            } else if (isConfigLine(line)) {
+                if (!boot.bootConfig) boot.bootConfig = line; else if (!boot.launchConfig) boot.launchConfig = line;
+            } else if (/^\d/.test(line)) {
+                boot.lines.push(line);
             }
         }
         // Same minimum as a live offload (Connection.flushRecordedFlight()), so the stubs between real
@@ -524,10 +531,12 @@ document.getElementById('file-upload').addEventListener('change', function (e) {
             return;
         }
 
+        // Boots numbered among all that logged rows, stubs included, so the number matches the capture
         const baseName = file.name.replace('.txt', '');
+        const firstNew = flightData.length;
         kept.forEach((b, i) => flightData.push({
             id: Date.now() + i,
-            name: kept.length > 1 ? `${baseName} (boot ${i + 1})` : baseName,
+            name: kept.length > 1 ? `${baseName} (boot ${withRows.indexOf(b) + 1})` : baseName,
             raw: b.lines,
             bootConfig: b.bootConfig,
             launchConfig: b.launchConfig,
@@ -536,14 +545,7 @@ document.getElementById('file-upload').addEventListener('change', function (e) {
             header: loadedHeader || placeholderHeader(b.lines),
             format: loadedFormat,
         }));
-        // Newest of this file's boots that the launch filter shows (it keeps the selection listed anyway)
-        let pick = flightData.length - 1;
-        if (launchFilterOn()) {
-            for (let i = flightData.length - 1; i >= flightData.length - kept.length; i--) {
-                if (flightHasAscentDescent(flightData[i])) { pick = i; break; }
-            }
-        }
-        selectFlight(pick);
+        selectFlight(lastVisibleFlightIndex(firstNew));
 
         logTerm(kept.length > 1 ? `Loaded local file: ${file.name} (${kept.length} boots)` : `Loaded local file: ${file.name}`, "#22c55e");
         // Reset input so you can load the same file again if needed

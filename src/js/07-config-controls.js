@@ -17,7 +17,7 @@ function rebuildPyroFireButtons(conn) {
     container.innerHTML = layoutForHeader(conn.header).pyros.filter(p => p.fireCmd).map(p =>
         `<button class="btn btn-warn ctrl-btn" data-cmd="${p.fireCmd}" data-confirm="Fire ${p.label} pyro?" disabled>Fire ${p.label}</button>`
     ).join('');
-    setSerialEnabled(isConnected(conn)); // newly-created buttons start disabled - sync them to the real state
+    setSerialEnabled(controlsUsable(conn)); // newly-created buttons start disabled - sync them to the real state
 }
 
 // Control Panel's log-health readout (see Connection.processLine, which
@@ -72,7 +72,7 @@ function rebuildConfigFields(conn) {
         }));
     });
 
-    setSerialEnabled(isConnected(conn));
+    setSerialEnabled(controlsUsable(conn));
 }
 
 async function confirmErase() {

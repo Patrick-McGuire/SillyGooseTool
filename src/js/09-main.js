@@ -48,11 +48,15 @@ function clearTerm() {
 }
 
 const radioForwardBtn = document.getElementById('radioForwardBtn');
+// Also called by Connection.beginSession(), which turns forwarding off for each new connection.
+function syncRadioForwardButton(conn) {
+    radioForwardBtn.textContent = `To Radio: ${conn.forwardToRadio ? 'ON' : 'OFF'}`;
+    radioForwardBtn.classList.toggle('active', conn.forwardToRadio);
+}
 radioForwardBtn.onclick = () => {
     const conn = ConnectionManager.getActive();
     conn.forwardToRadio = !conn.forwardToRadio;
-    radioForwardBtn.textContent = `To Radio: ${conn.forwardToRadio ? 'ON' : 'OFF'}`;
-    radioForwardBtn.classList.toggle('active', conn.forwardToRadio);
+    syncRadioForwardButton(conn);
 };
 
 setInterval(() => {
@@ -71,7 +75,7 @@ setInterval(() => {
 
 function setBusy(val) {
     document.getElementById('busy-loader').style.display = val ? 'block' : 'none';
-    if (!val && isConnected(ConnectionManager.getActive())) setSerialEnabled(true);
+    if (!val && controlsUsable(ConnectionManager.getActive())) setSerialEnabled(true);
 }
 
 // Redraws are already skipped entirely while hidden (see the `!document.hidden`
@@ -92,6 +96,12 @@ function openTab(id) {
     if (id === 'live-map-tab') {
         initLiveMap();
         setTimeout(() => { if (liveMap) { liveMap.invalidateSize(); showLiveTrack(); } }, 0);
+    }
+    // A flight plotted while this tab was hidden (an offload finishing on another tab) was sized
+    // against a zero-size box - fit it to the real one now
+    if (id === 'offload-tab') {
+        const gd = document.getElementById('plot-container');
+        if (gd._fullLayout) Plotly.Plots.resize(gd);
     }
 }
 

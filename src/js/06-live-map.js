@@ -114,6 +114,13 @@ let liveMap = null, liveMapTileLayers = null, liveMapActiveTileKey = 'satellite'
 // recordLiveTrack) - so switching tabs mid-flight doesn't leave a gap in the drawn path.
 const liveMapTrack = [];
 let liveMapCentered = false;
+// Bumped on every track change, so updateLiveMapPosition() redraws the path (up to 5000 points)
+// only when it actually changed rather than on every row.
+let liveMapTrackVersion = 0, liveMapDrawnTrackVersion = -1;
+let liveMapLastFixAt = 0;
+// A fix after this long with none is a new flight (a ground station left running between launches) -
+// it starts a fresh path rather than joining the two with a straight line.
+const LIVE_TRACK_NEW_FLIGHT_GAP_MS = 10 * 60 * 1000;
 // Ground station's own position (see Connection.handleGroundGps() in 03-connection.js) - a
 // second, distinct marker from the rocket's, since the two are different physical locations.
 // Created lazily on the first real fix (see updateLiveMapGroundPosition) rather than up front like
@@ -430,7 +437,10 @@ function hasRealFix(fixQuality) {
 function updateLiveMapPosition(lat, lon) {
     if (!liveMap) return;
     liveMapMarker.setLatLng([lat, lon]);
-    liveMapPath.setLatLngs(liveMapTrack);
+    if (liveMapDrawnTrackVersion !== liveMapTrackVersion) {
+        liveMapPath.setLatLngs(liveMapTrack);
+        liveMapDrawnTrackVersion = liveMapTrackVersion;
+    }
     if (!liveMapCentered) { liveMap.setView([lat, lon], 15); liveMapCentered = true; }
     updateGpsQrCode(lat, lon);
 }
@@ -443,12 +453,14 @@ function showLiveTrack() {
     updateLiveMapPosition(lat, lon);
 }
 
-// Starts a fresh path when the user starts a stream, so a bench session's track isn't joined onto
-// the flight's. Not on a reconnect that picks up a running stream - that's the same flight.
+// Starts a fresh path - when the user starts a stream (so a bench session's track isn't joined onto
+// the flight's), or after a long gap with no fix (see LIVE_TRACK_NEW_FLIGHT_GAP_MS). Not on a
+// reconnect that picks up a running stream - that's the same flight.
 function clearLiveTrack() {
     liveMapTrack.length = 0;
+    liveMapTrackVersion++;
     liveMapCentered = false;
-    if (liveMapPath) liveMapPath.setLatLngs(liveMapTrack);
+    if (liveMapPath) { liveMapPath.setLatLngs(liveMapTrack); liveMapDrawnTrackVersion = liveMapTrackVersion; }
 }
 
 // Appends a row's GPS fix to liveMapTrack. Only when the position changed: rows arrive at up to
@@ -460,15 +472,19 @@ function recordLiveTrack(conn, row) {
     if (!hasRealFix(parseInt(row[cols.gpsFixQuality]))) return;
     const lat = parseFloat(row[cols.gpsLat]), lon = parseFloat(row[cols.gpsLon]);
     if (isNaN(lat) || isNaN(lon)) return;
+    const now = Date.now();
+    if (liveMapTrack.length && now - liveMapLastFixAt > LIVE_TRACK_NEW_FLIGHT_GAP_MS) clearLiveTrack();
+    liveMapLastFixAt = now;
     const last = liveMapTrack[liveMapTrack.length - 1];
     if (last && last[0] === lat && last[1] === lon) return;
     liveMapTrack.push([lat, lon]);
     if (liveMapTrack.length > 5000) liveMapTrack.shift();
+    liveMapTrackVersion++;
 }
 
 // Places/moves the ground station's marker - see liveMapGroundMarker's comment for why this
 // creates it lazily instead of up front like the rocket marker. Only recenters the view on it if
-// the rocket hasn't reported a position yet (liveMapTrack empty): once the rocket's flying, its
+// the map hasn't been centered on the rocket yet (liveMapCentered): once the rocket's flying, its
 // track is the more useful thing to keep in view, and updateLiveMapPosition's own recenter (on the
 // rocket's first fix) already covers that case.
 function updateLiveMapGroundPosition(lat, lon) {
@@ -478,7 +494,7 @@ function updateLiveMapGroundPosition(lat, lon) {
             icon: L.divIcon({ className: 'ground-marker', html: '&#9679;', iconSize: [16, 16], iconAnchor: [8, 8] }),
             title: 'Ground station'
         }).addTo(liveMap);
-        if (liveMapTrack.length === 0) liveMap.setView([lat, lon], 15);
+        if (!liveMapCentered) liveMap.setView([lat, lon], 15);
     } else {
         liveMapGroundMarker.setLatLng([lat, lon]);
     }

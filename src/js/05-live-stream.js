@@ -175,6 +175,10 @@ document.getElementById('history-slider').oninput = function () {
     const conn = ConnectionManager.getActive();
     conn.maxLivePoints = parseInt(this.value);
     // handleLiveLine() only drops one old row per new one, so a lowered limit never took effect
-    if (conn.liveDataBuffer.length > conn.maxLivePoints) conn.liveDataBuffer.splice(0, conn.liveDataBuffer.length - conn.maxLivePoints);
+    if (conn.liveDataBuffer.length > conn.maxLivePoints) {
+        conn.liveDataBuffer.splice(0, conn.liveDataBuffer.length - conn.maxLivePoints);
+        // Redraw now - a stopped stream sends no row to trigger it
+        if (document.getElementById('live-tab').classList.contains('active')) throttledPlotLive.forceNow();
+    }
     document.getElementById('hist-val').innerText = this.value;
 };

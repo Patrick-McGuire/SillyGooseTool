@@ -16,6 +16,8 @@ const SERIAL_RX_BUFFER_BYTES = 8 * 1024 * 1024;
 // offload when the host stops draining USB, and does so without sending its end-of-log
 // terminator or "Ending Offload", so the parser would otherwise wait in binary mode forever.
 const OFFLOAD_STALL_MS = 3000;
+// Read errors Web Serial recovers from on its own - see Connection.readLoop().
+const RECOVERABLE_SERIAL_ERRORS = new Set(['BufferOverrunError', 'BreakError', 'FramingError', 'ParityError']);
 
 // Adapts a BLE notify characteristic to the ReadableStreamDefaultReader
 // shape ({read, cancel, releaseLock}) so Connection.readLoop() doesn't need
@@ -139,6 +141,10 @@ class Connection {
         this.streaming = false;
         // Set after a stalled offload so its late rows aren't adopted as a stream (processLine())
         this.adoptStreamBlocked = false;
+        // True once this connection's LOG_FORMAT has arrived - see beginSession()/processLine()
+        this.formatThisSession = false;
+        this.erasePending = false;
+        this.offloadStartIdx = 0; // flightData.length when the current offload started
         this.simActive = false; // true while the Simulation tab holds the writable stream locked
         this.currentFlightLines = [];
         this.currentFlightBin = [];
@@ -197,6 +203,7 @@ class Connection {
             DebugLog.info('protocol', `log format: ${format.structName}, ${format.fields.length} fields, ${format.size} bytes`);
         }
         this.logFormat = format;
+        this.formatThisSession = true;
         this.setHeader(format.header);
     }
 
@@ -210,12 +217,25 @@ class Connection {
         rebuildPyroFireButtons(this);
     }
 
-    // Forgets the previous board's log format - called on every (re)connect, since the board
-    // (or its firmware) may have changed - then asks the new one for its own. Old firmware
-    // answers with an unknown-command error, which is harmless.
-    async resetLogFormat() {
+    // Per-connection state, reset before the read loop starts on every (re)connect - including the
+    // post-flash one (fwAdoptPort()) - so nothing carries over from the previous board or session:
+    // its log format (the board or its firmware may have changed), ground-station mode (a runtime
+    // config, only revealed by the board's own output - see processLine()), radio forwarding, and
+    // the stalled-offload guard.
+    beginSession() {
         this.logFormat = null;
+        this.formatThisSession = false;
         this.setHeader([]);
+        this.isGroundStation = false;
+        this.forwardToRadio = false;
+        this.adoptStreamBlocked = false;
+        this.erasePending = false;
+        syncRadioForwardButton(this);
+    }
+
+    // Asks the board for its log format. Old firmware answers with an unknown-command error,
+    // which is harmless.
+    async requestLogFormat() {
         try { await this.sendCmd("--logFormat"); } catch (e) { DebugLog.warn('protocol', 'logFormat request failed: ' + e.message); }
     }
 
@@ -255,10 +275,11 @@ class Connection {
             DebugLog.info('connection', 'port opened');
             this.transport = 'usb';
             setConnectedUI(true);
+            this.beginSession();
             this.keepReading = true;
             this.readLoop();
             await detectAltimeterOnConnect(this);
-            await this.resetLogFormat();
+            await this.requestLogFormat();
         } catch (e) {
             DebugLog.error('connection', 'connect failed: ' + e.message);
             logTerm("Connection Error: " + e.message, "red");
@@ -311,10 +332,11 @@ class Connection {
             this.transport = 'bluetooth';
             DebugLog.info('connection', 'bluetooth connected: ' + (device.name || device.id));
             setConnectedUI(true);
+            this.beginSession();
             this.keepReading = true;
             this.readLoop();
             await detectAltimeterOnConnect(this);
-            await this.resetLogFormat();
+            await this.requestLogFormat();
         } catch (e) {
             DebugLog.error('connection', 'bluetooth connect failed: ' + e.message);
             logTerm("Bluetooth Connection Error: " + e.message, "red");
@@ -403,7 +425,8 @@ class Connection {
                 'Flights received so far are kept - run the offload again for the rest.', "red");
             DebugLog.warn('offload', 'stalled - board stopped sending mid-offload');
         }
-        if (flightData.length) selectFlight(lastVisibleFlightIndex());
+        // Only this offload's flights - not an older import - when none of them launched
+        if (flightData.length > this.offloadStartIdx) selectFlight(lastVisibleFlightIndex(this.offloadStartIdx));
     }
 
     startOffloadWatchdog() {
@@ -443,9 +466,11 @@ class Connection {
         }
         DebugLog.tx('serial', wireMsg);
         logTerm(`>> ${msg}`, "#38bdf8");
-        // Those three stay busy until their own reply clears it (processLine()) - except relayed
-        // over radio, where they're high-bandwidth-only commands the flying board never answers.
-        const clearedByReply = !this.forwardToRadio && (msg.includes("offload") || msg.includes("erase") || msg.includes("streamLog"));
+        // These stay busy until their own reply clears it (processLine()) - except --offload and
+        // --streamLog relayed over radio, which are high-bandwidth-only, so the flying board never
+        // answers them. --erase is answered either way.
+        if (msg.includes("erase")) this.erasePending = true;
+        const clearedByReply = msg.includes("erase") || (!this.forwardToRadio && (msg.includes("offload") || msg.includes("streamLog")));
         if (!clearedByReply) setTimeout(() => setBusy(false), 800);
     }
 
@@ -482,13 +507,19 @@ class Connection {
         if (line.startsWith("GPS\t")) { this.isGroundStation = true; this.handleGroundGps(line); return; }
 
         const isDataRow = /^\d/.test(line);
+        const matchesFormat = isDataRow && this.header.length && line.split("\t").length === this.header.length;
         // A board keeps streaming across a reconnect (its "Streaming enabled" went to the old
         // session), so rows matching its log format with nothing else running mean it's streaming.
-        if (isDataRow && !this.recording && !this.streaming && !this.simActive && !this.isGroundStation && !this.adoptStreamBlocked
-            && this.header.length && line.split("\t").length === this.header.length) {
+        // Only once this session's LOG_FORMAT reply is in: the board answers --logFormat only
+        // between offloads, so rows from an offload still running at connect never qualify.
+        if (matchesFormat && this.formatThisSession && !this.recording && !this.streaming && !this.simActive
+            && !this.isGroundStation && !this.adoptStreamBlocked) {
             this.beginStreaming();
         }
-        if (!((this.recording || this.streaming) && isDataRow)) logTerm(line);
+        // A stalled offload's resumed rows are data, not CLI output - echoing them at full rate is
+        // the terminal backlog the perf note above describes.
+        const isOrphanedRow = this.adoptStreamBlocked && matchesFormat;
+        if (!((this.recording || this.streaming) && isDataRow) && !isOrphanedRow) logTerm(line);
 
         if (line.includes("Entries in log:")) Telemetry.set('logEntries', line.split(':').pop().trim());
         if (line.includes("Remaining log length:")) Telemetry.set('logRemaining', formatLogTime(line.split(':').pop().trim()));
@@ -510,6 +541,7 @@ class Connection {
         }
 
         if (line.includes("Starting Offload")) {
+            this.offloadStartIdx = flightData.length;
             this.recording = true; this.currentFlightLines = []; this.currentFlightBin = [];
             this.currentBootConfig = ""; this.currentLaunchConfig = ""; this.currentFlightMessages = [];
             Telemetry.set('offloadProgress', 0);
@@ -548,7 +580,8 @@ class Connection {
             // with a digit timestamp, so this is an exhaustive - not best-effort - classifier).
             else this.currentFlightMessages.push({ afterRow: this.currentFlightLines.length, text: line });
         }
-        if (line.includes("Erase Complete")) setBusy(false);
+        // BasicLogger's erase answers "Erasing all" then a bare "Done"
+        if (this.erasePending && /^MSG:\s+Done$/.test(line)) { this.erasePending = false; setBusy(false); }
     }
 
     // Starts a fresh streaming session: empty buffers, then the 'streaming' telemetry key, which
@@ -774,6 +807,13 @@ class Connection {
                     }
                 }
             } catch (e) {
+                // Web Serial's recoverable errors (bytes dropped or garbled on the line) end only
+                // this reader - port.readable is replaced and the port stays open, so carry on.
+                if (this.transport !== 'bluetooth' && RECOVERABLE_SERIAL_ERRORS.has(e.name)) {
+                    DebugLog.warn('connection', 'recoverable read error: ' + e.name);
+                    logTerm(`Serial read error (${e.name}) - some data was lost, still connected.`, "red");
+                    continue;
+                }
                 // A genuinely dead port (device unplugged, crashed mid-offload)
                 // lands here. Without forceUIDisconnect(), the read loop just
                 // stops silently: the port stays set, the UI keeps showing
@@ -790,10 +830,10 @@ class Connection {
 }
 
 // Toggles the Connect/Disconnect tab-bar buttons and every device-facing
-// control together. The three places a connection actually opens or closes -
-// Connection.connect, Connection.forceUIDisconnect, and firmware.js's
-// fwAdoptPort (post-flash auto-reconnect) - all flip the same three things,
-// so they share this instead of repeating it.
+// control together. The places a connection actually opens or closes -
+// Connection.connect/connectBluetooth, Connection.forceUIDisconnect, and
+// firmware.js's fwAdoptPort (post-flash auto-reconnect) - all flip the same
+// three things, so they share this instead of repeating it.
 function setConnectedUI(connected) {
     document.getElementById('connectBtn').style.display = connected ? 'none' : (navigator.serial ? 'block' : 'none');
     document.getElementById('connectBluetoothBtn').style.display = connected ? 'none' : (navigator.bluetooth ? 'block' : 'none');
@@ -817,6 +857,12 @@ function setConnectButtonsDisabled(disabled) {
 // True while a board is connected over either transport - a Bluetooth link has no port.
 function isConnected(conn) {
     return !!(conn.port || conn.bleWriter);
+}
+
+// Device controls stay disabled through a Simulation run - it holds the port's writer, so
+// sendCmd() would ignore them anyway (see Simulation.run() in 10-simulation.js).
+function controlsUsable(conn) {
+    return isConnected(conn) && !conn.simActive;
 }
 
 // Column lookups (LIVE_FIELDS indices + pyro channels) for a saved flight's own header.
@@ -918,13 +964,8 @@ function showProfileSelectModal(conn, hint) {
 // never for a normal, recognized connect (the previously-always-visible
 // Altimeter dropdown is gone; this replaces it).
 async function detectAltimeterOnConnect(conn) {
-    // Reset on every connect attempt - conn is reused across sessions, and whether this particular
-    // SeriousGoose is actually running in ground-station mode can't be known from its USB identity
-    // alone (GROUND_STATION_MODE_c is a runtime config, not a separate board/firmware). This only
-    // flips true reactively in processLine() once a "RADIO_RX"/"GPS" line is actually seen.
-    conn.isGroundStation = false;
-    conn.forwardToRadio = false;
-    conn.adoptStreamBlocked = false;
+    // Per-session flags (ground-station mode etc.) are reset by Connection.beginSession() before the
+    // read loop starts - resetting them here, after this awaits, could undo a RADIO_RX already seen.
 
     // Desktop reads the USB iProduct string (fwDetectVariant, precise down to variant number);
     // a plain browser only gets numeric vendor/product ids (fwDetectFamilyFromUsbIds) - still

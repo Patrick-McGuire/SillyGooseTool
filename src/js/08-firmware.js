@@ -283,14 +283,13 @@ async function fwAdoptPort(conn, p) {
     } catch (e) { return false; }                          // not ready / wrong device — caller keeps trying
     conn.port = p;
     conn.transport = 'usb';
-    document.getElementById('connectBtn').style.display = 'none';
-    document.getElementById('disconnectBtn').style.display = 'block';
-    setSerialEnabled(true);
+    setConnectedUI(true);
+    conn.beginSession();
     conn.keepReading = true;
     conn.readLoop();
     // Freshly flashed firmware may log a different struct - give it a moment to finish booting
-    // before asking (see Connection.resetLogFormat()).
-    setTimeout(() => conn.resetLogFormat(), 2000);
+    // before asking (see Connection.requestLogFormat()).
+    setTimeout(() => conn.requestLogFormat(), 2000);
     return true;
 }
 

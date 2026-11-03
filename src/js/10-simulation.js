@@ -186,7 +186,7 @@ const Simulation = (() => {
             try { writer.releaseLock(); } catch (e) {}
             running = false;
             conn.simActive = false;
-            setSerialEnabled(!!conn.port);
+            setSerialEnabled(controlsUsable(conn));
             simShowRunningUI(false);
         }
     }
