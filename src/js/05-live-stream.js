@@ -41,11 +41,15 @@ Telemetry.subscribe('streaming', on => {
 const STREAM_LOG_FLUSH_INTERVAL_MS = 2000;
 let streamLogFlushTimer = null;
 let streamLogPending = [];
+// A ground station also logs each relayed packet's signal: RSSI (dBm) and SNR (dB) from its
+// RADIO_RX line, appended after the flight computer's own columns.
+const RADIO_LINK_COLUMNS = ['radioRssiDbm', 'radioSnrDb'];
 
 function startStreamLogging(conn) {
     streamLogPending = [];
     if (!window.sgStreamLog) return;
-    window.sgStreamLog.start({ header: conn.header.join('\t'), profileId: conn.profile.id })
+    const header = conn.isGroundStation ? [...conn.header, ...RADIO_LINK_COLUMNS] : conn.header;
+    window.sgStreamLog.start({ header: header.join('\t'), format: conn.logFormat ? LOG_FORMAT_PREFIX + conn.logFormat.definition : '', profileId: conn.profile.id })
         .catch(e => DebugLog.error('stream-log', 'start failed: ' + e.message));
     if (streamLogFlushTimer) clearInterval(streamLogFlushTimer);
     streamLogFlushTimer = setInterval(flushStreamLog, STREAM_LOG_FLUSH_INTERVAL_MS);
@@ -100,14 +104,20 @@ const throttledPlotLive = throttleByTime(plotLive, LIVE_REDRAW_MIN_INTERVAL_MS);
 
 // Handle one line of live telemetry (text stream, or reconstructed from a
 // binary record) - shared by the Live Stream plot and the Live Map tab.
-function handleLiveLine(conn, line) {
+function handleLiveLine(conn, line, radioLink = null) {
     const parts = line.split(/[\s\t]+/);
-    if (parts.length < conn.profile.oldMinCols) return;
+    // Old firmware streams without describing its columns - name them placeholders so the
+    // graph still works. A row that doesn't match a known header is from a stale format.
+    if (!conn.header.length) conn.setHeader(placeholderHeader([line]));
+    if (parts.length !== conn.header.length) {
+        DebugLog.warn('stream', `row has ${parts.length} columns, log format has ${conn.header.length} - dropping`);
+        return;
+    }
     conn.liveDataBuffer.push(parts);
     if (conn.liveDataBuffer.length > conn.maxLivePoints) conn.liveDataBuffer.shift();
 
     conn.streamLogLines.push(line);
-    streamLogPending.push(line);
+    streamLogPending.push(radioLink ? `${line}\t${radioLink.rssi}\t${radioLink.snr}` : line);
     lastMessageAt = Date.now();
     refreshStreamingBadge();
 
@@ -126,7 +136,7 @@ function updateLiveDashboardWithMostRecent() {
     const time = (parseFloat(last[0]) - t0) / 1000;
 
     let html = `<div class="hover-item">Live Time: <span class="hover-val">${time.toFixed(3)}s</span></div>`;
-    conn.activeSeries.forEach(idx => {
+    seriesColumns(conn.header, conn.activeSeries).forEach(idx => {
         html += `<div class="hover-item">${conn.header[idx]}: <span class="hover-val">${parseFloat(last[idx]).toFixed(2)}</span></div>`;
     });
     dash.innerHTML = html;
@@ -139,7 +149,7 @@ function plotLive() {
     const t0 = parseFloat(conn.liveDataBuffer[0][0]);
     const t = conn.liveDataBuffer.map(r => (parseFloat(r[0]) - t0) / 1000);
 
-    const traces = conn.activeSeries.map(idx => {
+    const traces = seriesColumns(conn.header, conn.activeSeries).map(idx => {
         const vals = conn.liveDataBuffer.map(r => parseFloat(r[idx]));
         return {
             x: t, y: vals, name: conn.header[idx], mode: 'lines',

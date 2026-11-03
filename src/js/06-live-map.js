@@ -383,8 +383,8 @@ function updateCompass(yawDeg) {
 }
 
 // Four states, most-severe first. continuity/armed are already resolved to plain booleans by
-// publishTelemetryFromRow() (which knows the active profile's pyroHasArmedTier) - this function
-// stays profile-agnostic, just rendering whatever it's given.
+// publishTelemetryFromRow() (which knows whether the channel has an armed tier) - this function
+// stays board-agnostic, just rendering whatever it's given.
 function setPyroBadge(id, continuity, armed, fired) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -397,12 +397,12 @@ function setPyroBadge(id, continuity, armed, fired) {
     el.className = 'pyro-badge ' + cls;
 }
 
-// Rebuilds the Live Map's pyro badges, one per channel in the active
-// profile's `pyros` list (see ALTIMETER_PROFILES[...].pyros).
+// Rebuilds the Live Map's pyro badges, one per pyro channel in the connection's log columns
+// (see layoutForHeader()).
 function rebuildPyroWidgets(conn) {
     const container = document.getElementById('telemetry-pyros');
     if (!container) return;
-    container.innerHTML = conn.profile.pyros.map(p =>
+    container.innerHTML = layoutForHeader(conn.header).pyros.map(p =>
         `<div class="pyro-item"><span>${p.label}</span><span id="pyro-${p.id}" class="pyro-badge">-</span></div>`
     ).join('');
 }
@@ -466,7 +466,9 @@ function updateGpsQrCode(lat, lon) {
 // Everything downstream (navball, compass, pyro badges, battery/GPS readouts)
 // subscribes to these keys rather than reading `row[cols.x]` directly.
 function publishTelemetryFromRow(conn, row) {
-    const cols = conn.profile.cols;
+    // A field the board doesn't log has no column: row[undefined] parses as NaN, which every
+    // widget below already shows as "-"
+    const { cols, pyros } = layoutForHeader(conn.header);
 
     const battV = parseFloat(row[cols.battV]);
     Telemetry.set('battV', isNaN(battV) ? null : battV);
@@ -476,23 +478,22 @@ function publishTelemetryFromRow(conn, row) {
         Telemetry.set('attitude', quatToEuler(quat.w, quat.x, quat.y, quat.z));
     }
 
-    // One entry per pyro channel in the active profile (see ALTIMETER_PROFILES[...].pyros).
-    // contCol's raw value is 0/1/2 on a pyroHasArmedTier board (SeriousGoose) but just 0/1
-    // otherwise (SillyGoose) - see that flag's comment in 02-protocol.js. Resolved to plain
-    // continuity/armed booleans here (where the active profile is known) so setPyroBadge() stays
-    // profile-agnostic.
-    Telemetry.set('pyros', conn.profile.pyros.map(p => {
+    // One entry per pyro channel. contCol's raw value is 0/1/2 for a "<id>State" field
+    // (SeriousGoose) but just 0/1 for a "<id>Continuity" one (SillyGoose) - see layoutForHeader().
+    // Resolved to plain continuity/armed booleans here so setPyroBadge() stays board-agnostic.
+    // Continuity alone reads as ARMED without the armed tier (matches ArduinoPyro::isArmed()).
+    Telemetry.set('pyros', pyros.map(p => {
         const state = parseInt(row[p.contCol], 10) || 0;
         return {
             id: p.id, label: p.label,
             continuity: state >= 1,
-            armed: conn.profile.pyroHasArmedTier ? state >= 2 : state >= 1,
+            armed: p.hasArmedTier ? state >= 2 : state >= 1,
             fired: row[p.firedCol] === "1"
         };
     }));
     Telemetry.set('flightState', parseInt(row[cols.flightState]));
 
-    if (conn.profile.hasGps && cols.gpsLat !== undefined) {
+    if (cols.gpsLat !== undefined && cols.gpsLon !== undefined) {
         Telemetry.set('gps', {
             hasGps: true,
             lat: parseFloat(row[cols.gpsLat]), lon: parseFloat(row[cols.gpsLon]),
@@ -557,10 +558,11 @@ function initTelemetryWidgets() {
 function updateElevationSparkline(conn) {
     if (typeof Plotly === 'undefined') return;
     conn = conn || ConnectionManager.getActive();
-    const cols = conn.profile.cols;
+    const { cols } = layoutForHeader(conn.header);
+    const timeCol = cols.timestampMs ?? 0;
     const buf = conn.liveDataBuffer;
-    const t0 = buf.length ? parseFloat(buf[0][cols.timestampMs]) : 0;
-    const t = buf.map(r => (parseFloat(r[cols.timestampMs]) - t0) / 1000);
+    const t0 = buf.length ? parseFloat(buf[0][timeCol]) : 0;
+    const t = buf.map(r => (parseFloat(r[timeCol]) - t0) / 1000);
     const alt = buf.map(r => parseFloat(r[cols.altitudeM]));
     Plotly.react('elevation-sparkline', [{ x: t, y: alt, mode: 'lines', line: { color: '#38bdf8', width: 1.5 }, hoverinfo: 'none' }], {
         paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',

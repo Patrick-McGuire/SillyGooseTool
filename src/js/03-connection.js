@@ -109,10 +109,14 @@ class Connection {
         this._onBleDisconnected = () => this.handleBleDisconnected();
 
         this.profile = ALTIMETER_PROFILES.SillyGoose;
-        this.header = this.profile.header;
-        this.activeSeries = [...this.profile.defaultSeries];
         this.configs = this.profile.configs;
-        this.fwHeaderCrc = headerCrcFor(this.profile);
+        // Log columns, learned from the board itself (see "Log format" in 02-protocol.js):
+        // logFormat is the parsed LOG_FORMAT definition (null until one arrives, or for old
+        // firmware), header the column names - from logFormat, or from an old firmware's
+        // column-name line. activeSeries holds field NAMES, so it survives a format change.
+        this.logFormat = null;
+        this.header = [];
+        this.activeSeries = [...DEFAULT_GRAPH_SERIES];
         // True when the connected board is acting as a ground station (GROUND_STATION_MODE_c),
         // relaying another board's telemetry over radio rather than producing its own flight log.
         // There's no way to ask for this up front - it's set reactively the first time processLine()
@@ -158,25 +162,52 @@ class Connection {
         this.binConfigBytes = [];
     }
 
-    // Switches the active altimeter profile, refreshing everything derived from
-    // it: log column list, binary CRC fingerprint, and every profile-driven UI
-    // piece (series picker, config table, pyro widgets/fire buttons - each
-    // rebuild* function documents only what it builds, not this lifecycle).
-    // Safe to call any time, including mid-session - flightData already
-    // captured under a different profile keeps working via profileForFlight().
+    // Switches the active altimeter profile (config set, firmware naming) and rebuilds the
+    // config table. Log columns aren't part of a profile - see setHeader().
     setActiveProfile(id) {
         const profile = ALTIMETER_PROFILES[id];
         if (!profile || profile === this.profile) return;
         this.profile = profile;
-        this.header = profile.header;
-        this.activeSeries = [...profile.defaultSeries];
         this.configs = profile.configs;
-        this.fwHeaderCrc = headerCrcFor(profile);
         DebugLog.info('connection', `active profile -> ${profile.id}`);
-        rebuildSeriesPicker(this);
         rebuildConfigFields(this);
+    }
+
+    // Applies a "LOG_FORMAT\t<definition>" line's definition. A bad definition is reported and
+    // dropped, leaving whatever header was already known.
+    applyLogFormat(definition) {
+        let format;
+        try {
+            format = parseLogFormat(definition);
+        } catch (e) {
+            logTerm(`Couldn't read the board's log format (${e.message}) - ignoring it.`, "red");
+            DebugLog.warn('protocol', `bad LOG_FORMAT: ${e.message}: ${definition}`);
+            return;
+        }
+        if (!this.logFormat || this.logFormat.definition !== definition) {
+            DebugLog.info('protocol', `log format: ${format.structName}, ${format.fields.length} fields, ${format.size} bytes`);
+        }
+        this.logFormat = format;
+        this.setHeader(format.header);
+    }
+
+    // Sets the log column names and rebuilds everything derived from them (series picker,
+    // pyro badges and fire buttons). No-op when unchanged, so repeated LOG_FORMAT lines are cheap.
+    setHeader(names) {
+        if (this.header.length === names.length && this.header.every((n, i) => n === names[i])) return;
+        this.header = [...names];
+        rebuildSeriesPicker(this);
         rebuildPyroWidgets(this);
         rebuildPyroFireButtons(this);
+    }
+
+    // Forgets the previous board's log format - called on every (re)connect, since the board
+    // (or its firmware) may have changed - then asks the new one for its own. Old firmware
+    // answers with an unknown-command error, which is harmless.
+    async resetLogFormat() {
+        this.logFormat = null;
+        this.setHeader([]);
+        try { await this.sendCmd("--logFormat"); } catch (e) { DebugLog.warn('protocol', 'logFormat request failed: ' + e.message); }
     }
 
     async connect() {
@@ -219,6 +250,7 @@ class Connection {
             this.keepReading = true;
             this.readLoop();
             await detectAltimeterOnConnect(this);
+            await this.resetLogFormat();
         } catch (e) {
             DebugLog.error('connection', 'connect failed: ' + e.message);
             logTerm("Connection Error: " + e.message, "red");
@@ -274,6 +306,7 @@ class Connection {
             this.keepReading = true;
             this.readLoop();
             await detectAltimeterOnConnect(this);
+            await this.resetLogFormat();
         } catch (e) {
             DebugLog.error('connection', 'bluetooth connect failed: ' + e.message);
             logTerm("Bluetooth Connection Error: " + e.message, "red");
@@ -395,6 +428,7 @@ class Connection {
         // CLI over radio) in constant GPS/telemetry noise. Neither prefix is ever emitted outside
         // ground-station mode, so seeing one is itself the detection signal - there's no separate
         // "ask the board its mode" step.
+        if (line.startsWith(LOG_FORMAT_PREFIX)) { this.applyLogFormat(line.slice(LOG_FORMAT_PREFIX.length)); return; }
         if (line.startsWith("RADIO_RX\t")) { this.isGroundStation = true; this.handleGroundRadioRx(line); return; }
         if (line.startsWith("GPS\t")) { this.isGroundStation = true; this.handleGroundGps(line); return; }
 
@@ -439,6 +473,14 @@ class Connection {
                 if (!this.currentBootConfig) this.currentBootConfig = line; else this.currentLaunchConfig = line;
                 return;
             }
+            // The offload's column-name line. Redundant after a LOG_FORMAT line (same names), but
+            // it's the only description old firmware sends - and if it disagrees with the format,
+            // the format is stale and the names line wins.
+            if (isHeaderNamesLine(line)) {
+                if (this.logFormat && this.logFormat.header.join("\t") !== line) this.logFormat = null;
+                this.setHeader(line.split("\t"));
+                return;
+            }
             if (isDataRow) { this.currentFlightLines.push(line); this.recordOffloadProgress(); }
             // Anything else during a recording is arbitrary logged text (data rows always start
             // with a digit timestamp, so this is an exhaustive - not best-effort - classifier).
@@ -459,9 +501,7 @@ class Connection {
     // RADIO_MSG_TELEMETRY type byte (see Avionics.h/RadioMessageType_e) - CLI responses
     // (RADIO_MSG_CLI_RESPONSE) never reach this function, GroundStationRelay::tick() forwards
     // those as raw text directly instead (see its own comment), so every RADIO_RX line here is
-    // guaranteed telemetry. profile.decodeDataRecord() always skips byte 0 (a flash/offload
-    // record's id byte) - prepending one dummy byte after stripping the type byte reuses that
-    // decoder unmodified rather than forking a second copy of the field-offset logic.
+    // guaranteed telemetry.
     handleGroundRadioRx(line) {
         const parts = line.split('\t');
         if (parts.length < 4) return;
@@ -475,12 +515,16 @@ class Connection {
         const raw = new Uint8Array(hex.length / 2);
         for (let i = 0; i < raw.length; i++) raw[i] = parseInt(hex.substr(i * 2, 2), 16);
         const payload = raw.slice(1); // drop the leading RADIO_MSG_TELEMETRY type byte
-        if (payload.length !== this.profile.binDataSize) {
-            DebugLog.warn('ground', `RADIO_RX payload is ${payload.length} bytes, expected ${this.profile.binDataSize} for ${this.profile.id} - dropping`);
+        // The relayed struct is the flying board's, described by the ground station's own
+        // LOG_FORMAT (asked for on connect) - both run the same firmware.
+        if (!this.logFormat) {
+            DebugLog.warn('ground', 'RADIO_RX before any LOG_FORMAT - dropping');
             return;
         }
-        const padded = new Uint8Array(payload.length + 1); // dummy id byte at [0], see comment above
-        padded.set(payload, 1);
+        if (payload.length !== this.logFormat.size) {
+            DebugLog.warn('ground', `RADIO_RX payload is ${payload.length} bytes, log format is ${this.logFormat.size} - dropping`);
+            return;
+        }
 
         Telemetry.set('radioLink', { rssi, snr });
         if (!this.streaming) {
@@ -488,7 +532,7 @@ class Connection {
             Telemetry.set('streaming', true);
         }
         try {
-            handleLiveLine(this, this.profile.decodeDataRecord(padded));
+            handleLiveLine(this, decodeLogRecord(this.logFormat, payload, 0).join('\t'), { rssi, snr });
         } catch (e) {
             DebugLog.warn('ground', 'RADIO_RX decode failed: ' + e.message);
         }
@@ -560,7 +604,7 @@ class Connection {
         if (this.recording) this.currentFlightBin.push(rec);
         if (id === LOG_DATA) {
             if (this.recording) {
-                this.currentFlightLines.push(this.profile.decodeDataRecord(rec));
+                this.currentFlightLines.push(decodeLogRecord(this.logFormat, rec, 1).join('\t'));
                 this.recordOffloadProgress();
             }
         } else if (id === LOG_MESSAGE || id === LOG_MESSAGE_CONTINUATION) {
@@ -624,26 +668,17 @@ class Connection {
                                 const headerCrc = buf[5] | (buf[6] << 8);
                                 buf = buf.slice(7);
                                 recordSize = 1 + dataSize;
-                                if (dataSize === this.profile.binDataSize && headerCrc === this.fwHeaderCrc) {
+                                const fmt = this.logFormat;
+                                if (fmt && dataSize === fmt.size && headerCrc === headerCrcFor(fmt.header)) {
                                     mode = 'records';
                                 } else {
-                                    // Doesn't match the active profile - see if it matches a
-                                    // DIFFERENT known profile's fingerprint (e.g. the tool still
-                                    // has SillyGoose selected but a SeriousGoose is connected) and
-                                    // auto-switch, rather than just failing.
-                                    const matchId = Object.keys(ALTIMETER_PROFILES).find(id => {
-                                        const p = ALTIMETER_PROFILES[id];
-                                        return dataSize === p.binDataSize && headerCrc === headerCrcFor(p);
-                                    });
-                                    if (matchId && matchId !== this.profile.id) {
-                                        logTerm(`Detected ${ALTIMETER_PROFILES[matchId].displayName} log format - switching altimeter profile.`, "#38bdf8");
-                                        this.setActiveProfile(matchId);
-                                        mode = 'records';
-                                    } else {
-                                        logTerm(`Binary offload mismatch (size ${dataSize}, crc ${headerCrc}). Update this tool to match firmware; skipping records.`, "red");
-                                        DebugLog.warn('protocol', `binary mismatch: size=${dataSize} crc=${headerCrc}`);
-                                        mode = 'skip';
-                                    }
+                                    // The board sends LOG_FORMAT right before this preamble, so a
+                                    // missing one means firmware too old to send it.
+                                    logTerm(fmt
+                                        ? `Binary offload doesn't match the board's log format (size ${dataSize} vs ${fmt.size}, crc ${headerCrc}) - skipping records. Try a text offload.`
+                                        : "Board didn't send its log format (firmware too old?) - can't decode a binary offload. Use a text offload, or update the firmware.", "red");
+                                    DebugLog.warn('protocol', `binary mismatch: size=${dataSize} crc=${headerCrc} format=${fmt ? fmt.size : 'none'}`);
+                                    mode = 'skip';
                                 }
                                 progress = true;
                             }
@@ -703,11 +738,9 @@ function setConnectButtonsDisabled(disabled) {
     document.getElementById('connectBluetoothBtn').disabled = disabled;
 }
 
-// Returns the profile a saved flight was captured under (stamped by
-// saveFlight()/the file-upload handler), falling back to the currently active
-// profile for older in-memory flights that predate the stamp.
-function profileForFlight(f) {
-    return (f && ALTIMETER_PROFILES[f.profileId]) || ConnectionManager.getActive().profile;
+// Column lookups (LIVE_FIELDS indices + pyro channels) for a saved flight's own header.
+function layoutForFlight(f) {
+    return layoutForHeader(f.header);
 }
 
 // A macrotask yield (not just a microtask) so pending rendering/GC/timers get a

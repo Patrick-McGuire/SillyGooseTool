@@ -286,6 +286,9 @@ async function fwAdoptPort(conn, p) {
     setSerialEnabled(true);
     conn.keepReading = true;
     conn.readLoop();
+    // Freshly flashed firmware may log a different struct - give it a moment to finish booting
+    // before asking (see Connection.resetLogFormat()).
+    setTimeout(() => conn.resetLogFormat(), 2000);
     return true;
 }
 

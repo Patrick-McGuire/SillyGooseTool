@@ -608,6 +608,7 @@ ipcMain.handle('stream-log:start', (_event, meta) => {
   const profileId = (meta && meta.profileId) || 'unknown';
   const filePath = path.join(streamLogDir(), `stream-${stamp}-${profileId}.txt`);
   const fd = fs.openSync(filePath, 'a');
+  if (meta && meta.format) fs.writeSync(fd, meta.format + '\n');
   if (meta && meta.header) fs.writeSync(fd, meta.header + '\n');
   streamLogFile = { fd, path: filePath };
   return { path: filePath };

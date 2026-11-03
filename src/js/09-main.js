@@ -148,6 +148,7 @@ if (exportLogBtn) exportLogBtn.onclick = () => {
     const conn = ConnectionManager.getActive();
     DebugLog.download({
         'Active profile': conn.profile.id,
+        'Log format': conn.logFormat ? `${conn.logFormat.structName} (${conn.logFormat.fields.length} fields, ${conn.logFormat.size} bytes)` : (conn.header.length ? 'names line only' : 'none'),
         'Connected': !!conn.port,
         'Streaming': conn.streaming,
         'Flights this session': flightData.length

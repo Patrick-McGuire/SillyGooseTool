@@ -26,6 +26,10 @@ function saveFlight(conn, lines, opts = {}) {
         id: Date.now(), name: `${namePrefix}_${flightNum}`, raw: [...lines],
         bootConfig, launchConfig, profileId: conn.profile.id, connectionId: conn.id,
         messages: [...messages],
+        // The flight keeps its own column names (and definition, when the board sent one), so
+        // it still plots and exports correctly after the connection's format changes.
+        header: conn.header.length ? [...conn.header] : placeholderHeader(lines),
+        format: conn.logFormat ? conn.logFormat.definition : "",
     };
     // Exact byte-for-byte raw records, present only for binary offloads.
     if (binChunks && binChunks.length) flight.bin = concatChunks(binChunks);
@@ -35,11 +39,17 @@ function saveFlight(conn, lines, opts = {}) {
     selectFlight(flightData.length - 1);
 }
 
+// Column names for rows that arrived with no description at all (no LOG_FORMAT, no names line).
+function placeholderHeader(lines) {
+    const n = lines.length ? lines[0].split(/[\s\t]+/).length : 0;
+    return Array.from({ length: n }, (_, i) => `column${i + 1}`);
+}
+
 // True if any row in the flight is in ASCENT (1) or DESCENT (2). Cached since raw never changes.
 function flightHasAscentDescent(f) {
     if (f._hasAD === undefined) {
-        const col = profileForFlight(f).cols.flightState;
-        f._hasAD = f.raw.some(l => { const s = parseInt(l.split(/[\s\t]+/)[col]); return s === 1 || s === 2; });
+        const col = layoutForFlight(f).cols.flightState;
+        f._hasAD = col !== undefined && f.raw.some(l => { const s = parseInt(l.split(/[\s\t]+/)[col]); return s === 1 || s === 2; });
     }
     return f._hasAD;
 }
@@ -177,14 +187,14 @@ function selectFlight(i) {
 }
 
 function plotFlight(flight) {
-    const cols = profileForFlight(flight).cols;
-    const header = profileForFlight(flight).header;
-    const activeSeries = ConnectionManager.getActive().activeSeries;
+    const { cols, pyros } = layoutForFlight(flight);
+    const header = flight.header;
     const rows = flight.raw.map(l => l.split(/[\s\t]+/));
-    const t0 = parseFloat(rows[0][0]);
-    const t = rows.map(r => (parseFloat(r[0]) - t0) / 1000);
+    const timeCol = cols.timestampMs ?? 0;
+    const t0 = parseFloat(rows[0][timeCol]);
+    const t = rows.map(r => (parseFloat(r[timeCol]) - t0) / 1000);
 
-    const traces = activeSeries.map(idx => {
+    const traces = seriesColumns(header, ConnectionManager.getActive().activeSeries).map(idx => {
         const vals = rows.map(r => parseFloat(r[idx]));
         return {
             x: t, y: vals, name: header[idx], mode: 'lines',
@@ -192,15 +202,14 @@ function plotFlight(flight) {
         };
     });
 
-    const states = rows.map(r => parseInt(r[cols.flightState]));
+    const states = cols.flightState === undefined ? [] : rows.map(r => parseInt(r[cols.flightState]));
     const shapes = [], annotations = [];
     const addEv = (time, txt, col) => {
         shapes.push({ type: 'line', x0: time, x1: time, y0: 0, y1: 1, yref: 'paper', line: { color: col, width: 1, dash: 'dash' } });
         annotations.push({ x: time, y: 1, yref: 'paper', text: txt, showarrow: false, textangle: -90, xanchor: 'right', font: { color: col, size: 9 } });
     };
 
-    // One marker per pyro channel the flight's board has (see ALTIMETER_PROFILES[...].pyros).
-    const pyros = profileForFlight(flight).pyros;
+    // One marker per pyro channel the flight's board logs (see layoutForHeader()).
     const pyroEventColors = ['purple', 'blue', 'teal', 'brown', 'magenta'];
     for (let i = 1; i < states.length; i++) {
         if (states[i] !== states[i - 1]) addEv(t[i], `${FLIGHT_STATE_NAMES[states[i - 1]]} → ${FLIGHT_STATE_NAMES[states[i]]}`, 'green');
@@ -223,8 +232,9 @@ function plotFlight(flight) {
         setupHoverEvents('plot-container', 'hover-dashboard', false);
     });
 
-    document.getElementById('stat-alt').innerText = Math.max(...rows.map(r => parseFloat(r[cols.altitudeM]))).toFixed(1);
-    document.getElementById('stat-vel').innerText = Math.max(...rows.map(r => parseFloat(r[cols.velocityMS]))).toFixed(1);
+    const colMax = col => col === undefined ? '-' : Math.max(...rows.map(r => parseFloat(r[col]))).toFixed(1);
+    document.getElementById('stat-alt').innerText = colMax(cols.altitudeM);
+    document.getElementById('stat-vel').innerText = colMax(cols.velocityMS);
     document.getElementById('stat-state').innerText = FLIGHT_STATE_NAMES[states[states.length - 1]] || '-';
 }
 
@@ -291,12 +301,12 @@ function clearAllSession() {
 // tagging them "MSG\t<rowIndex>\t<text>" is enough to round-trip through the file-upload filter
 // below without colliding with data rows - no need to interleave them into the row sequence itself.
 function buildFlightText(f) {
-    const header = profileForFlight(f).header;
     const parts = [];
-    // Both CONFIG snapshots (boot, then launch) at the top, ahead of the header/data rows.
+    // Both CONFIG snapshots (boot, then launch) at the top, ahead of the format/header/data rows.
     if (f.bootConfig) parts.push(f.bootConfig);
     if (f.launchConfig) parts.push(f.launchConfig);
-    parts.push(header.join("\t"));
+    if (f.format) parts.push(LOG_FORMAT_PREFIX + f.format);
+    parts.push(f.header.join("\t"));
     parts.push(f.raw.join("\n"));
     if (f.messages && f.messages.length) parts.push(f.messages.map(m => `MSG\t${m.afterRow}\t${m.text}`).join("\n"));
     return parts.join("\n");
@@ -308,26 +318,43 @@ function downloadFlight(f) {
     a.download = f.name + ".txt"; a.click();
 }
 
+// Column indices of the selected series (field names) present in this header.
+function seriesColumns(header, seriesNames) {
+    return seriesNames.map(n => header.indexOf(n)).filter(i => i >= 0);
+}
+
+// The picker lists the live stream's columns while streaming, otherwise the selected flight's
+// (falling back to whichever of the two exists).
+function seriesPickerHeader(conn) {
+    const flight = selectedIdx >= 0 ? flightData[selectedIdx] : null;
+    if (conn.streaming && conn.header.length) return conn.header;
+    return (flight && flight.header.length) ? flight.header : conn.header;
+}
+
 function openSeriesModal() {
     rebuildSeriesPicker(ConnectionManager.getActive());
     document.getElementById('series-modal').style.display = 'flex';
 }
 function closeSeriesModal() {
     const conn = ConnectionManager.getActive();
-    conn.activeSeries = Array.from(document.querySelectorAll('#series-picker input:checked')).map(i => parseInt(i.dataset.idx));
+    const shown = new Set(Array.from(document.querySelectorAll('#series-picker input')).map(i => i.dataset.name));
+    const checked = Array.from(document.querySelectorAll('#series-picker input:checked')).map(i => i.dataset.name);
+    // Keep selections for fields this picker didn't list (another board's flights)
+    conn.activeSeries = [...conn.activeSeries.filter(n => !shown.has(n)), ...checked];
     document.getElementById('series-modal').style.display = 'none';
     if (selectedIdx !== -1) plotFlight(flightData[selectedIdx]);
     if (conn.streaming) plotLive();
 }
 
-// Rebuilds the graph series-picker checkboxes from the active profile's header.
+// Rebuilds the graph series-picker checkboxes, one per log column except the leading timestamp.
 function rebuildSeriesPicker(conn) {
     const picker = document.getElementById('series-picker');
     if (!picker) return;
     picker.innerHTML = '';
-    conn.header.forEach((h, i) => {
+    seriesPickerHeader(conn).forEach((h, i) => {
         if (i === 0) return;
-        picker.innerHTML += `<label class="series-opt"><input type="checkbox" data-idx="${i}" ${conn.activeSeries.includes(i) ? 'checked' : ''}> ${h}</label>`;
+        const name = escapeHtml(h);
+        picker.innerHTML += `<label class="series-opt"><input type="checkbox" data-name="${name}" ${conn.activeSeries.includes(h) ? 'checked' : ''}> ${name}</label>`;
     });
 }
 
@@ -346,6 +373,23 @@ document.getElementById('file-upload').addEventListener('change', function (e) {
         let loadedBootConfig = "", loadedLaunchConfig = "";
         if (allLines.length > 0 && isConfigLine(allLines[0])) loadedBootConfig = allLines.shift();
         if (allLines.length > 0 && isConfigLine(allLines[0])) loadedLaunchConfig = allLines.shift();
+
+        // Column names: from a LOG_FORMAT line (this tool's exports, raw captures of new
+        // firmware), else the first column-name line (older exports and firmware), else placeholders.
+        let loadedFormat = "", loadedHeader = null;
+        const formatLine = allLines.find(l => l.startsWith(LOG_FORMAT_PREFIX));
+        if (formatLine) {
+            try {
+                loadedHeader = parseLogFormat(formatLine.slice(LOG_FORMAT_PREFIX.length)).header;
+                loadedFormat = formatLine.slice(LOG_FORMAT_PREFIX.length);
+            } catch (err) {
+                DebugLog.warn('offload', `${file.name}: bad LOG_FORMAT line (${err.message}) - using the names line`);
+            }
+        }
+        if (!loadedHeader) {
+            const namesLine = allLines.find(isHeaderNamesLine);
+            if (namesLine) loadedHeader = namesLine.split("\t");
+        }
 
         // Keep only data rows. Drops any non-data preamble (column header in either
         // firmware or website format, "Logger setup" boot marker, stray MSG lines, etc.)
@@ -367,15 +411,16 @@ document.getElementById('file-upload').addEventListener('change', function (e) {
         }
 
         // Create a new flight entry from the loaded data
-        const profileId = guessProfileFromColumnCount(lines[0].split(/[\s\t]+/).length, ConnectionManager.getActive().profile.id);
         const newFlight = {
             id: Date.now(),
             name: file.name.replace('.txt', ''),
             raw: lines,
             bootConfig: loadedBootConfig,
             launchConfig: loadedLaunchConfig,
-            profileId,
-            messages
+            profileId: ConnectionManager.getActive().profile.id,
+            messages,
+            header: loadedHeader || placeholderHeader(lines),
+            format: loadedFormat,
         };
 
         flightData.push(newFlight);

@@ -1,54 +1,8 @@
 // --- Altimeter profiles -----------------------------------------------------
-// Everything that differs between flight computer variants (log column layout,
-// binary record decoding, config set, firmware asset naming) lives in one of
-// these profile objects. The rest of the app reads through a connection's
-// `profile` / `header` / `configs` rather than hardcoding a specific board's
-// layout, so adding a new board should only mean adding a new profile here.
-//
-// SeriousGoose's log struct is NOT just SillyGoose's struct with GPS fields
-// appended: it inserts its raw magnetometer (magX/Y/Z) right after imuTemp,
-// BEFORE battV, and its aux pyro channel (`auxContinuity`/`auxFired`) right
-// after mainFired, before the tilt/angularVel/quaternion block SillyGoose
-// also has. Both insertions shift every subsequent SillyGoose column for
-// SeriousGoose only. `COMMON_COLS` below only covers the genuinely identical
-// prefix (timestampMs - the only field before the first insertion point) -
-// each profile defines the rest of its own `cols` past that. Per-flight code
-// should look values up through the flight's own profile's `cols` (see
-// `profileForFlight()`), not assume the two profiles agree beyond that.
-const SILLY_GOOSE_HEADER = [
-    "timestampMs", "pressurePa", "tempK", "accelX", "accelY", "accelZ",
-    "gyroX", "gyroY", "gyroZ", "imuTemp", "battV", "altitudeM",
-    "velocityMS", "accelerationMSS", "unfiltAlt", "flightState",
-    "drogueCont", "drogueFired", "mainCont", "mainFired",
-    "tiltMagnitudeDeg", "angularVelRadS_x", "angularVelRadS_y", "angularVelRadS_z",
-    "quaternion_a", "quaternion_b", "quaternion_c", "quaternion_d"
-];
-const SERIOUS_GOOSE_HEADER = [
-    "timestampMs", "pressurePa", "tempK", "accelX", "accelY", "accelZ",
-    "gyroX", "gyroY", "gyroZ", "imuTemp", "magX", "magY", "magZ", "battV", "altitudeM",
-    "velocityMS", "accelerationMSS", "unfiltAlt", "flightState",
-    // drogueState/mainState/auxState pack a 0/1/2 continuity+armed reading (see ArduinoPyro's
-    // two-threshold model, firmware) into the same single byte a plain bool continuity flag
-    // already used - no wire-size change from SillyGoose's continuity/fired layout below.
-    "drogueState", "drogueFired", "mainState", "mainFired", "auxState", "auxFired",
-    "tiltMagnitudeDeg", "angularVelRadS_x", "angularVelRadS_y", "angularVelRadS_z",
-    "quaternion_a", "quaternion_b", "quaternion_c", "quaternion_d",
-    "gpsLatitudeDeg", "gpsLongitudeDeg", "gpsAltitudeM", "gpsUnixTimeS", "gpsHdop", "gpsVdop", "gpsFixQuality", "gpsSatellitesTracked"
-];
-// Genuinely identical between every board so far - just timestampMs, since
-// SeriousGoose's magX/Y/Z insertion (see comment above) shifts everything
-// from battV onward. Pyro columns are NOT here either - see each profile's
-// own `pyros` list below, since boards can have a different number of pyro
-// channels (SillyGoose: drogue+main; SeriousGoose: +aux; a future board
-// might have more still).
-const COMMON_COLS = {
-    timestampMs: 0
-};
-const SILLY_GOOSE_LOG_HEADER_STR = "timestampMs\tpressurePa\tbarometerTemperatureK\taccelerationMSS_x\taccelerationMSS_y\taccelerationMSS_z\tvelocityRadS_x\tvelocityRadS_y\tvelocityRadS_z\timuTemperatureK\tbatteryVoltageV\taltitudeM\tvelocityMS\taccelerationMSS\tunfilteredAltitudeM\tflightState\tdrogueContinuity\tdrogueFired\tmainContinuity\tmainFired\ttiltMagnitudeDeg\tangularVelRadS_x\tangularVelRadS_y\tangularVelRadS_z\tquaternion_a\tquaternion_b\tquaternion_c\tquaternion_d";
-// Must match SeriousGoose.cpp's LOG_HEADER macro byte-for-byte - it's hashed
-// (see crc16/headerCrcFor below) to auto-detect/validate a binary offload's
-// format, so any drift here silently breaks that detection instead of erroring.
-const SERIOUS_GOOSE_LOG_HEADER_STR = "timestampMs\tpressurePa\tbarometerTemperatureK\taccelerationMSS_x\taccelerationMSS_y\taccelerationMSS_z\tvelocityRadS_x\tvelocityRadS_y\tvelocityRadS_z\timuTemperatureK\tmagFieldTeslaRaw_x\tmagFieldTeslaRaw_y\tmagFieldTeslaRaw_z\tbatteryVoltageV\taltitudeM\tvelocityMS\taccelerationMSS\tunfilteredAltitudeM\tflightState\tdrogueState\tdrogueFired\tmainState\tmainFired\tauxState\tauxFired\ttiltMagnitudeDeg\tangularVelRadS_x\tangularVelRadS_y\tangularVelRadS_z\tquaternion_a\tquaternion_b\tquaternion_c\tquaternion_d\tgpsLatitudeDeg\tgpsLongitudeDeg\tgpsAltitudeM\tgpsUnixTimeS\tgpsHdop\tgpsVdop\tgpsFixQuality\tgpsSatellitesTracked";
+// What differs between flight computer variants that the board can't describe itself: config
+// set, binary config layout, firmware asset naming, USB identity. The log data layout is NOT
+// here - every board sends its own (see "Log format" below), so the tool keeps no per-board
+// list of log variables.
 
 const SILLY_GOOSE_CONFIGS = [
     { id: "DROGUE_DELAY", label: "Drogue Delay (milliseconds)" },
@@ -178,91 +132,141 @@ function formatConfigAsText(decoded, configFields) {
 // the Live Map widget, the config viewer's FLIGHT_STATE formatter).
 const FLIGHT_STATE_NAMES = { 0: "PRE_FLIGHT", 1: "ASCENT", 2: "DESCENT", 3: "POST_FLIGHT", 4: "UNKNOWN_FLIGHT_STATE" };
 
-// Decodes the fields every board has in common (timestampMs through
-// imuTemperatureK) from a DataView positioned at the start of a LOG_DATA
-// record (byte 0 is the record id). Returns the fields plus the byte offset
-// just past them, so each profile's decodeDataRecord can keep decoding
-// whatever comes next in its own layout - SeriousGoose's raw mag floats sit
-// right here, shifting everything from battV onward for that board only
-// (see decodeBattThroughPyroFields/decodeOrientationFields for the other
-// shared blocks, and ALTIMETER_PROFILES for what's profile-specific).
-function decodeCommonFields(dv) {
-    let o = 1; // skip the id byte
-    const f = () => { const v = dv.getFloat32(o, true); o += 4; return v; };
-    const u32 = () => { const v = dv.getUint32(o, true); o += 4; return v; };
-    const fields = [
-        u32(),         // timestampMs
-        f(), f(),      // pressurePa, barometerTemperatureK
-        f(), f(), f(), // accel x,y,z
-        f(), f(), f(), // gyro x,y,z
-        f(),           // imuTemperatureK
-    ];
-    return { fields, offset: o };
+// --- Log format ---------------------------------------------------------------
+// Firmware defines its log struct with LOG_DATA_AUTO_DEFINE (BasicLoggerHelper.h) and sends the
+// definition text as a "LOG_FORMAT\t<definition>" line - at the start of every offload, when
+// streaming starts, and in reply to --logFormat (sent on connect). For example:
+//   LOG_FORMAT	struct SillyGooseLogData { uint32_t timestampMs; float pressurePa, barometerTemperatureK; ... } __attribute__((packed));
+// Everything about the log columns (names, order, binary layout) comes from that. Older firmware
+// sends no definition, but its text offloads still start with a tab-separated column-name line,
+// which is enough for text data (see Connection.processLine()).
+const LOG_FORMAT_PREFIX = "LOG_FORMAT\t";
+
+// The only log fields the tool knows by name: what the live view widgets read, and which series
+// the graphs show by default. A board that lacks one just doesn't light up that widget.
+const LIVE_FIELDS = {
+    timestampMs: "timestampMs",
+    altitudeM: "altitudeM",
+    velocityMS: "velocityMS",
+    flightState: "flightState",
+    battV: "batteryVoltageV",
+    quatA: "quaternion_a", quatB: "quaternion_b", quatC: "quaternion_c", quatD: "quaternion_d",
+    gpsLat: "gpsLatitudeDeg", gpsLon: "gpsLongitudeDeg",
+    gpsFixQuality: "gpsFixQuality", gpsSatellites: "gpsSatellitesTracked",
+};
+const DEFAULT_GRAPH_SERIES = ["altitudeM", "velocityMS", "accelerationMSS"];
+
+// Pyro channels are found by field name: "<id>State" (0/1/2 open/unarmed/armed - see
+// ArduinoPyro's two-threshold model) or "<id>Continuity" (plain 0/1), paired with "<id>Fired".
+// The fire command is CLI, not log data, so it can't come from the definition.
+const PYRO_FIRE_FLAGS = { drogue: "-d", main: "-m", aux: "-a" };
+
+// Same rules as BasicLoggerHelper's parser, with the target's sizes (ARM: long is 4 bytes,
+// plain char is unsigned). The binary preamble's struct size double-checks the result.
+const NAMED_LOG_TYPES = {
+    bool: { kind: "b", size: 1 }, float: { kind: "f", size: 4 }, double: { kind: "f", size: 8 },
+    int8_t: { kind: "i", size: 1 }, int16_t: { kind: "i", size: 2 }, int32_t: { kind: "i", size: 4 }, int64_t: { kind: "i", size: 8 },
+    uint8_t: { kind: "u", size: 1 }, uint16_t: { kind: "u", size: 2 }, uint32_t: { kind: "u", size: 4 }, uint64_t: { kind: "u", size: 8 },
+};
+const INT_TYPE_KEYWORDS = new Set(["unsigned", "signed", "short", "long", "char", "int"]);
+const IDENT_RE = /^[A-Za-z_]\w*$/;
+
+function resolveLogType(words) {
+    if (words.length === 1 && NAMED_LOG_TYPES[words[0]]) return NAMED_LOG_TYPES[words[0]];
+    if (!words.length || !words.every(w => INT_TYPE_KEYWORDS.has(w))) return null;
+    const longs = words.filter(w => w === "long").length;
+    const isChar = words.includes("char"), isShort = words.includes("short");
+    const size = isChar ? 1 : isShort ? 2 : longs >= 2 ? 8 : 4;
+    const signed = words.includes("unsigned") ? false : words.includes("signed") ? true : !isChar;
+    return { kind: signed ? "i" : "u", size };
 }
 
-// Decodes battV through mainFired (10 fields) - identical layout on every
-// board so far, but its byte OFFSET varies (SeriousGoose's mag floats shift
-// it relative to SillyGoose), so callers pass in where it starts.
-function decodeBattThroughPyroFields(dv, o) {
-    const f = () => { const v = dv.getFloat32(o, true); o += 4; return v; };
-    const i32 = () => { const v = dv.getInt32(o, true); o += 4; return v; };
-    const b = () => dv.getUint8(o++);
-    const fields = [
-        f(), f(), f(), f(), f(), // battV, altitudeM, velocityMS, accelerationMSS, unfilteredAltitudeM
-        i32(),                   // flightState
-        b(), b(), b(), b()       // drogueCont, drogueFired, mainCont, mainFired
-    ];
-    return { fields, offset: o };
+// Parses a LOG_FORMAT definition into { definition, structName, fields: [{name, type, kind,
+// size, offset}], size, header: [names] }. Throws on anything it can't lay out - the firmware's
+// static_asserts reject the same constructs, so this only fires for corrupted or foreign input.
+function parseLogFormat(definition) {
+    const open = definition.indexOf("{");
+    const close = open < 0 ? -1 : definition.indexOf("}", open);
+    if (open < 0 || close < 0) throw new Error("no struct body");
+    const nameMatch = definition.slice(0, open).match(/struct\s+([A-Za-z_]\w*)/);
+    const fields = [];
+    let offset = 0;
+    for (const rawDecl of definition.slice(open + 1, close).split(";")) {
+        const decl = rawDecl.trim();
+        if (!decl) continue;
+        const parts = decl.split(",").map(p => p.trim());
+        const words = parts[0].split(/\s+/);
+        const names = [words.pop(), ...parts.slice(1)];
+        const type = resolveLogType(words);
+        if (!type) throw new Error(`unsupported type "${words.join(" ")}"`);
+        for (const name of names) {
+            if (!IDENT_RE.test(name)) throw new Error(`bad field name "${name}"`);
+            fields.push({ name, type: words.join(" "), kind: type.kind, size: type.size, offset });
+            offset += type.size;
+        }
+    }
+    if (!fields.length) throw new Error("struct has no fields");
+    return { definition, structName: nameMatch ? nameMatch[1] : "", fields, size: offset, header: fields.map(f => f.name) };
 }
 
-// Decodes the tilt/angularVel/quaternion block (8 floats) - identical on every
-// board so far, but its byte OFFSET varies (SeriousGoose's 2 aux pyro bytes
-// shift it relative to SillyGoose), so callers pass in where it starts.
-function decodeOrientationFields(dv, o) {
-    const f = () => { const v = dv.getFloat32(o, true); o += 4; return v; };
-    const fields = [f(), f(), f(), f(), f(), f(), f(), f()]; // tilt, angularVel x,y,z, quat a,b,c,d
-    return { fields, offset: o };
+// A firmware column-name line ("timestampMs\tpressurePa\t...") - the fallback when no
+// LOG_FORMAT was sent. Data rows start with a digit and CONFIG/MSG lines contain '=' / ':',
+// so this can't match either.
+function isHeaderNamesLine(line) {
+    const names = line.split("\t");
+    return names.length > 1 && names.every(n => IDENT_RE.test(n));
 }
 
-function formatDecodedRow(fields) {
-    return fields.map(v => Number.isInteger(v) ? String(v) : String(+v.toFixed(6))).join('\t');
+// Decodes one packed record (little-endian) into display strings, starting `base` bytes in -
+// 1 for flash/offload records (byte 0 is the record id), 0 for a bare struct.
+function decodeLogRecord(format, bytes, base) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+    return format.fields.map(f => {
+        const o = base + f.offset;
+        if (f.kind === "f") {
+            // 9 significant digits round-trips a float; String() alone would print the
+            // double expansion (101325.1171875 for 101325.117f)
+            return f.size === 4 ? String(parseFloat(dv.getFloat32(o, true).toPrecision(9))) : String(dv.getFloat64(o, true));
+        }
+        if (f.size === 8) return String(f.kind === "i" ? dv.getBigInt64(o, true) : dv.getBigUint64(o, true));
+        if (f.kind === "i") return String(f.size === 1 ? dv.getInt8(o) : f.size === 2 ? dv.getInt16(o, true) : dv.getInt32(o, true));
+        return String(f.size === 1 ? dv.getUint8(o) : f.size === 2 ? dv.getUint16(o, true) : dv.getUint32(o, true));
+    });
 }
 
-// Flight computer profiles - drive Offload / Live Stream / Live Map / System
-// Configuration.
+// Column lookups for one header (a list of field names): `cols` maps each LIVE_FIELDS key to
+// its column index (missing when the board doesn't log it), `pyros` lists the detected pyro
+// channels. Cached per header array.
+const layoutCache = new WeakMap();
+function layoutForHeader(header) {
+    if (layoutCache.has(header)) return layoutCache.get(header);
+    const index = new Map(header.map((n, i) => [n, i]));
+    const cols = {};
+    for (const [key, name] of Object.entries(LIVE_FIELDS)) if (index.has(name)) cols[key] = index.get(name);
+    const pyros = [];
+    header.forEach((name, i) => {
+        const m = name.match(/^([a-z]\w*?)(State|Continuity)$/);
+        if (!m || !index.has(`${m[1]}Fired`)) return;
+        const id = m[1];
+        pyros.push({
+            id, label: id.charAt(0).toUpperCase() + id.slice(1),
+            contCol: i, firedCol: index.get(`${id}Fired`),
+            hasArmedTier: m[2] === "State",
+            fireCmd: PYRO_FIRE_FLAGS[id] ? `--fire ${PYRO_FIRE_FLAGS[id]}` : null,
+        });
+    });
+    const layout = { cols, pyros };
+    layoutCache.set(header, layout);
+    return layout;
+}
+
+// Flight computer profiles - drive System Configuration and firmware updates. Log columns are
+// per-connection/per-flight instead (Connection.header, flight.header), from the board's own
+// LOG_FORMAT.
 const ALTIMETER_PROFILES = {
     SillyGoose: {
         id: "SillyGoose",
         displayName: "SillyGoose",
-        header: SILLY_GOOSE_HEADER,
-        oldMinCols: 20, // pre-orientation-firmware live streams still pass the length check
-        binDataSize: 100, // sizeof(SillyGooseLogData), packed
-        fwLogHeader: SILLY_GOOSE_LOG_HEADER_STR,
-        defaultSeries: [11, 12, 13],
-        cols: { ...COMMON_COLS, battV: 10, altitudeM: 11, velocityMS: 12, flightState: 15, tiltMagnitudeDeg: 20, angularVelX: 21, angularVelY: 22, angularVelZ: 23, quatA: 24, quatB: 25, quatC: 26, quatD: 27 },
-        // Pyro channels as a list, not fixed named fields - a board with more
-        // (or fewer) than these two just has a longer (or shorter) list here;
-        // nothing downstream (Live Map badges, Control Panel Fire buttons,
-        // offload graph fired-event markers) hardcodes "drogue"/"main"/"aux".
-        pyros: [
-            { id: "drogue", label: "Drogue", contCol: 16, firedCol: 17, fireCmd: "--fire -d" },
-            { id: "main", label: "Main", contCol: 18, firedCol: 19, fireCmd: "--fire -m" }
-        ],
-        // ArduinoPyro's continuity byte is 0/1 here (single threshold - no separate armed
-        // reading), vs SeriousGoose's 0/1/2 below - see publishTelemetryFromRow() in
-        // 06-live-map.js, which is what actually branches on this to interpret contCol's raw
-        // value correctly per-profile. Continuity alone reads as ARMED for boards without this
-        // tier (matches ArduinoPyro::isArmed()'s firmware-side default), so the UNARMED badge
-        // state is simply never reached here.
-        pyroHasArmedTier: false,
-        hasGps: false,
-        decodeDataRecord(rec) {
-            const dv = new DataView(rec.buffer, rec.byteOffset, rec.length);
-            const common = decodeCommonFields(dv);
-            const pyro = decodeBattThroughPyroFields(dv, common.offset);
-            const orient = decodeOrientationFields(dv, pyro.offset);
-            return formatDecodedRow([...common.fields, ...pyro.fields, ...orient.fields]);
-        },
         configs: SILLY_GOOSE_CONFIGS,
         configFields: SILLY_GOOSE_CONFIG_FIELDS,
         firmwareVariants: [
@@ -274,54 +278,6 @@ const ALTIMETER_PROFILES = {
     SeriousGoose: {
         id: "SeriousGoose",
         displayName: "SeriousGoose",
-        header: SERIOUS_GOOSE_HEADER,
-        oldMinCols: 36, // still a valid MINIMUM column count (41 cols now) - not bumped
-        binDataSize: 136, // sizeof(SillyGooseLogData) in SeriousGoose.cpp, packed (100 + 12 mag bytes + 2 aux bytes + 22 GPS bytes)
-        fwLogHeader: SERIOUS_GOOSE_LOG_HEADER_STR,
-        defaultSeries: [14, 15, 16],
-        cols: {
-            ...COMMON_COLS,
-            magX: 10, magY: 11, magZ: 12,
-            battV: 13, altitudeM: 14, velocityMS: 15, flightState: 18,
-            tiltMagnitudeDeg: 25, angularVelX: 26, angularVelY: 27, angularVelZ: 28,
-            quatA: 29, quatB: 30, quatC: 31, quatD: 32,
-            gpsLat: 33, gpsLon: 34, gpsAlt: 35, gpsUnixTimeS: 36, gpsHdop: 37, gpsVdop: 38, gpsFixQuality: 39, gpsSatellites: 40
-        },
-        // contCol's raw byte value is 0/1/2 here (open/unarmed/armed - see ArduinoPyro's
-        // two-threshold model, firmware) vs SillyGoose's 0/1 (above) - packed into the exact same
-        // single continuity byte either way, no wire-size change. See pyroHasArmedTier's comment
-        // (above) for where this is actually interpreted.
-        pyroHasArmedTier: true,
-        pyros: [
-            { id: "drogue", label: "Drogue", contCol: 19, firedCol: 20, fireCmd: "--fire -d" },
-            { id: "main", label: "Main", contCol: 21, firedCol: 22, fireCmd: "--fire -m" },
-            { id: "aux", label: "Aux", contCol: 23, firedCol: 24, fireCmd: "--fire -a" }
-        ],
-        hasGps: true,
-        decodeDataRecord(rec) {
-            const dv = new DataView(rec.buffer, rec.byteOffset, rec.length);
-            const common = decodeCommonFields(dv);
-            let o = common.offset;
-            const magX = dv.getFloat32(o, true); o += 4;
-            const magY = dv.getFloat32(o, true); o += 4;
-            const magZ = dv.getFloat32(o, true); o += 4;
-            const pyro = decodeBattThroughPyroFields(dv, o);
-            o = pyro.offset;
-            const auxState = dv.getUint8(o); o += 1;
-            const auxFired = dv.getUint8(o); o += 1;
-            const orient = decodeOrientationFields(dv, o);
-            o = orient.offset;
-            const all = [...common.fields, magX, magY, magZ, ...pyro.fields, auxState, auxFired, ...orient.fields];
-            all.push(dv.getFloat32(o, true)); o += 4; // gpsLatitudeDeg
-            all.push(dv.getFloat32(o, true)); o += 4; // gpsLongitudeDeg
-            all.push(dv.getFloat32(o, true)); o += 4; // gpsAltitudeM
-            all.push(dv.getUint32(o, true)); o += 4;  // gpsUnixTimeS
-            all.push(dv.getUint16(o, true)); o += 2;  // gpsHdop
-            all.push(dv.getUint16(o, true)); o += 2;  // gpsVdop
-            all.push(dv.getUint8(o)); o += 1;         // gpsFixQuality
-            all.push(dv.getUint8(o)); o += 1;         // gpsSatellitesTracked
-            return formatDecodedRow(all);
-        },
         configs: [...SILLY_GOOSE_CONFIGS, ...RADIO_CONFIGS],
         configFields: SERIOUS_GOOSE_CONFIG_FIELDS,
         firmwareVariants: [{ value: "V1", label: "SeriousGoose V1" }],
@@ -334,6 +290,8 @@ const ALTIMETER_PROFILES = {
 const ALL_BOARD_FAMILIES = ALTIMETER_PROFILES;
 
 // --- Binary offload protocol (mirrors firmware BasicLogger.h) ---
+// Preamble: 'SGB', struct size (u16), CRC16 of the tab-joined field names (u16) - checked
+// against the LOG_FORMAT line the board sent just before it.
 const BIN_MAGIC = [0x53, 0x47, 0x42]; // 'SGB'
 const LOG_EMPTY = 0xFF, LOG_DATA = 0x01, LOG_NEW_FLIGHT = 0x02, LOG_MESSAGE = 0x03, LOG_MESSAGE_CONTINUATION = 0x04, LOG_CONFIG = 0x05, LOG_CONFIG_CONTINUATION = 0x06;
 // CRC-16/CCITT (poly 0x1021, init 0xFFFF) — matches firmware src/util/CRC.h crc16().
@@ -345,14 +303,6 @@ function crc16(bytes) {
     }
     return crc & 0xFFFF;
 }
-function headerCrcFor(profile) {
-    return crc16(Array.from(profile.fwLogHeader, c => c.charCodeAt(0)));
-}
-
-// Best-effort guess at which profile a loaded text file belongs to, based on
-// how many columns its data rows have. Text files (unlike binary offloads)
-// carry no CRC fingerprint, so this is the best available signal.
-function guessProfileFromColumnCount(n, fallbackId) {
-    const matches = Object.values(ALTIMETER_PROFILES).filter(p => p.header.length === n);
-    return matches.length === 1 ? matches[0].id : fallbackId;
+function headerCrcFor(header) {
+    return crc16(Array.from(header.join("\t"), c => c.charCodeAt(0)));
 }

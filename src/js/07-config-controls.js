@@ -9,12 +9,12 @@ function setSerialEnabled(en) {
     document.querySelectorAll('.ctrl-btn, .cfg-get, .cfg-set, #sendBtn, #getAllBtn, #eraseBtn').forEach(b => b.disabled = !en);
 }
 
-// Rebuilds the Control Panel's Fire buttons, one per channel in the active
-// profile's `pyros` list (see ALTIMETER_PROFILES[...].pyros).
+// Rebuilds the Control Panel's Fire buttons, one per pyro channel in the connection's log
+// columns that has a known fire command (see PYRO_FIRE_FLAGS / layoutForHeader()).
 function rebuildPyroFireButtons(conn) {
     const container = document.getElementById('pyro-fire-buttons');
     if (!container) return;
-    container.innerHTML = conn.profile.pyros.map(p =>
+    container.innerHTML = layoutForHeader(conn.header).pyros.filter(p => p.fireCmd).map(p =>
         `<button class="btn btn-warn ctrl-btn" data-cmd="${p.fireCmd}" data-confirm="Fire ${p.label} pyro?" disabled>Fire ${p.label}</button>`
     ).join('');
     setSerialEnabled(!!conn.port); // newly-created buttons start disabled - sync them to the real state
