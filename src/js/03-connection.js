@@ -186,6 +186,7 @@ class Connection {
         this.configs = profile.configs;
         DebugLog.info('connection', `active profile -> ${profile.id}`);
         rebuildConfigFields(this);
+        rebuildPyroFireButtons(this);
     }
 
     // Applies a "LOG_FORMAT\t<definition>" line's definition. A bad definition is reported and
@@ -207,14 +208,13 @@ class Connection {
         this.setHeader(format.header);
     }
 
-    // Sets the log column names and rebuilds everything derived from them (series picker,
-    // pyro badges and fire buttons). No-op when unchanged, so repeated LOG_FORMAT lines are cheap.
+    // Sets the log column names and rebuilds everything derived from them (series picker and
+    // pyro badges). No-op when unchanged, so repeated LOG_FORMAT lines are cheap.
     setHeader(names) {
         if (this.header.length === names.length && this.header.every((n, i) => n === names[i])) return;
         this.header = [...names];
         rebuildSeriesPicker(this);
         rebuildPyroWidgets(this);
-        rebuildPyroFireButtons(this);
     }
 
     // Per-connection state, reset before the read loop starts on every (re)connect - including the

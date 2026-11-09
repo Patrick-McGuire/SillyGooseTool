@@ -61,6 +61,8 @@
            variable number of buttons - needs the same stacking its static
            sibling groups get "for free" from .control-group's own flex-column. */
         #pyro-fire-buttons { display: flex; flex-direction: column; gap: 4px; }
+        .pyro-fire-row { display: flex; gap: 4px; }
+        .pyro-fire-row .btn { flex: 1; }
         .control-group-label { font-size: var(--fs-xs); color: #94a3b8; text-transform: uppercase; margin-bottom: 1px; }
         .control-group .btn { height: 26px; font-size: var(--fs-sm); padding: 3px 8px; }
         /* The log-health readout sits right under its own group's buttons (not

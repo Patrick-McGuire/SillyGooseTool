@@ -253,7 +253,6 @@ function layoutForHeader(header) {
             id, label: id.charAt(0).toUpperCase() + id.slice(1),
             contCol: i, firedCol: index.get(`${id}Fired`),
             hasArmedTier: m[2] === "State",
-            fireCmd: PYRO_FIRE_FLAGS[id] ? `--fire ${PYRO_FIRE_FLAGS[id]}` : null,
         });
     });
     const layout = { cols, pyros };
@@ -270,6 +269,7 @@ const ALTIMETER_PROFILES = {
         displayName: "SillyGoose",
         configs: SILLY_GOOSE_CONFIGS,
         configFields: SILLY_GOOSE_CONFIG_FIELDS,
+        pyroChannels: ["drogue", "main"],
         firmwareVariants: [
             { value: "V1", label: "SillyGoose V1" },
             { value: "V2", label: "SillyGoose V2" }
@@ -282,6 +282,7 @@ const ALTIMETER_PROFILES = {
         configs: [...SILLY_GOOSE_CONFIGS, ...RADIO_CONFIGS],
         configFields: SERIOUS_GOOSE_CONFIG_FIELDS,
         firmwareVariants: [{ value: "V1", label: "SeriousGoose V1" }],
+        pyroChannels: ["drogue", "main", "aux"],
         // Also matches an old already-deployed SeriousGooseGroundV1 unit (pre-GROUND_STATION_MODE
         // firmware) - it's the same board family/wire protocol, just running as a ground station,
         // which is now a runtime mode rather than separate firmware (see GROUND_STATION_MODE_c).

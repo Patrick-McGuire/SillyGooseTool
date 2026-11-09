@@ -9,14 +9,22 @@ function setSerialEnabled(en) {
     document.querySelectorAll('.ctrl-btn, .cfg-get, .cfg-set, #sendBtn, #getAllBtn, #eraseBtn').forEach(b => b.disabled = !en);
 }
 
-// Rebuilds the Control Panel's Fire buttons, one per pyro channel in the connection's log
-// columns that has a known fire command (see PYRO_FIRE_FLAGS / layoutForHeader()).
+// Rebuilds the Control Panel's pyro buttons: a Fire (timed) and a Turn on (held on until reboot,
+// for a channel used as a power switch) button for every channel in PYRO_FIRE_FLAGS. Channels the
+// active profile doesn't have (pyroChannels) stay greyed out - no ctrl-btn class, so
+// setSerialEnabled() never enables them.
 function rebuildPyroFireButtons(conn) {
     const container = document.getElementById('pyro-fire-buttons');
     if (!container) return;
-    container.innerHTML = layoutForHeader(conn.header).pyros.filter(p => p.fireCmd).map(p =>
-        `<button class="btn btn-warn ctrl-btn" data-cmd="${p.fireCmd}" data-confirm="Fire ${p.label} pyro?" disabled>Fire ${p.label}</button>`
-    ).join('');
+    container.innerHTML = Object.entries(PYRO_FIRE_FLAGS).map(([id, flag]) => {
+        const label = id.charAt(0).toUpperCase() + id.slice(1);
+        const applies = conn.profile.pyroChannels.includes(id);
+        const attrs = applies ? 'class="btn btn-warn ctrl-btn"' : `class="btn btn-warn" title="${conn.profile.displayName} has no ${label} channel"`;
+        return `<div class="pyro-fire-row">
+            <button ${attrs} data-cmd="--fire ${flag}" data-confirm="Fire ${label} pyro?" disabled>Fire ${label}</button>
+            <button ${attrs} data-cmd="--fire ${flag} --on" data-confirm="Turn on ${label} and hold it on until the board reboots?" disabled>Turn on ${label}</button>
+        </div>`;
+    }).join('');
     setSerialEnabled(controlsUsable(conn)); // newly-created buttons start disabled - sync them to the real state
 }
 
