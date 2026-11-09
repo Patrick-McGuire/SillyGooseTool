@@ -10,7 +10,7 @@ function setSerialEnabled(en) {
 }
 
 // Rebuilds the Control Panel's pyro buttons: Arm/Disarm (--arm/--disarm, saved on the board;
-// a disarmed board never detects launch, so never deploys), then a Fire (timed) and a Turn on
+// a disarmed board's pyros are locked off, so nothing fires), then a Fire (timed) and a Turn on
 // (held on until reboot, for a channel used as a power switch) button for every channel in
 // PYRO_FIRE_FLAGS. Buttons the active profile doesn't support (armable, pyroChannels) stay
 // greyed out - no ctrl-btn class, so setSerialEnabled() never enables them.
@@ -22,8 +22,8 @@ function rebuildPyroFireButtons(conn) {
         ? `<button id="arm-status" class="btn btn-secondary ctrl-btn arm-status" data-cmd="--armed" title="Click to re-check" disabled>Armed: ?</button>`
         : `<button id="arm-status" class="btn btn-secondary arm-status" disabled>${conn.profile.displayName}: always armed</button>`;
     const armRow = armStatus + `<div class="pyro-fire-row">
-        <button ${armAttrs} data-cmd="--arm" data-confirm="Arm the board? It will detect launch and deploy pyros in flight." disabled>Arm</button>
-        <button ${armAttrs} data-cmd="--disarm" data-confirm="Disarm the board? It won't detect launch or deploy anything until armed again." disabled>Disarm</button>
+        <button ${armAttrs} data-cmd="--arm" data-confirm="Arm the board? Its pyros will be able to fire, including deployments in flight." disabled>Arm</button>
+        <button ${armAttrs} data-cmd="--disarm" data-confirm="Disarm the board? Its pyros will be locked off (nothing fires, including deployments) until armed again. Flights are still tracked and logged." disabled>Disarm</button>
     </div>`;
     container.innerHTML = armRow + Object.entries(PYRO_FIRE_FLAGS).map(([id, flag]) => {
         const label = id.charAt(0).toUpperCase() + id.slice(1);
