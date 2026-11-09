@@ -48,6 +48,7 @@ function clearTerm() {
 }
 
 const radioForwardBtn = document.getElementById('radioForwardBtn');
+const radioForwardNotice = document.getElementById('radioForwardNotice');
 // Also called by Connection.beginSession(), which turns forwarding off for each new connection.
 function syncRadioForwardButton(conn) {
     radioForwardBtn.textContent = `To Radio: ${conn.forwardToRadio ? 'ON' : 'OFF'}`;
@@ -57,6 +58,9 @@ radioForwardBtn.onclick = () => {
     const conn = ConnectionManager.getActive();
     conn.forwardToRadio = !conn.forwardToRadio;
     syncRadioForwardButton(conn);
+    // The armed status shown is for whichever board commands now reach - re-ask that one.
+    Telemetry.set('cfg.ARMED', null);
+    conn.requestArmState();
 };
 
 setInterval(() => {
@@ -71,6 +75,7 @@ setInterval(() => {
     // no separate event for that, so this just polls it on the same cadence as the flush above.
     const conn = ConnectionManager.getActive();
     radioForwardBtn.style.display = conn.isGroundStation ? '' : 'none';
+    radioForwardNotice.style.display = conn.isGroundStation && conn.forwardToRadio ? '' : 'none';
 }, 100);
 
 function setBusy(val) {

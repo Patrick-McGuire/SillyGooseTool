@@ -40,6 +40,7 @@
                  (see conn.isGroundStation - 03-connection.js/09-main.js). Toggles whether typed
                  CLI commands run on this board directly or get relayed over radio to the flying
                  board's CLI instead (GroundStationRelay's --send, DebugStreamQueue in firmware). -->
+            <span id="radioForwardNotice" class="radio-forward-notice" style="display:none">Forwarding All Commands Over Radio</span>
             <button id="radioForwardBtn" class="btn btn-secondary nav-btn" style="display:none" title="When on, commands typed below are relayed over radio to the flying board instead of running on this ground station">To Radio: OFF</button>
             <div id="busy-loader" class="loader"></div>
             <!-- Browser build only - Electron windows don't get throttled like a backgrounded
