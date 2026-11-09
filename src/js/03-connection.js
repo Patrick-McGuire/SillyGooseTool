@@ -230,6 +230,7 @@ class Connection {
         this.forwardToRadio = false;
         this.adoptStreamBlocked = false;
         this.erasePending = false;
+        Telemetry.set('cfg.ARMED', null);
         syncRadioForwardButton(this);
     }
 
@@ -237,6 +238,13 @@ class Connection {
     // which is harmless.
     async requestLogFormat() {
         try { await this.sendCmd("--logFormat"); } catch (e) { DebugLog.warn('protocol', 'logFormat request failed: ' + e.message); }
+    }
+
+    // Asks an armable board (SeriousGoose) whether it's armed - the "ARMED is set to" reply lands
+    // in Telemetry cfg.ARMED, which the Control Panel's arm status shows (renderArmStatus()).
+    async requestArmState() {
+        if (!this.profile.armable) return;
+        try { await this.sendCmd("--armed"); } catch (e) { DebugLog.warn('protocol', 'armed request failed: ' + e.message); }
     }
 
     async connect() {
@@ -280,6 +288,7 @@ class Connection {
             this.readLoop();
             await detectAltimeterOnConnect(this);
             await this.requestLogFormat();
+            await this.requestArmState();
         } catch (e) {
             DebugLog.error('connection', 'connect failed: ' + e.message);
             logTerm("Connection Error: " + e.message, "red");
@@ -337,6 +346,7 @@ class Connection {
             this.readLoop();
             await detectAltimeterOnConnect(this);
             await this.requestLogFormat();
+            await this.requestArmState();
         } catch (e) {
             DebugLog.error('connection', 'bluetooth connect failed: ' + e.message);
             logTerm("Bluetooth Connection Error: " + e.message, "red");

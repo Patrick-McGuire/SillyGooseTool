@@ -9,14 +9,23 @@ function setSerialEnabled(en) {
     document.querySelectorAll('.ctrl-btn, .cfg-get, .cfg-set, #sendBtn, #getAllBtn, #eraseBtn').forEach(b => b.disabled = !en);
 }
 
-// Rebuilds the Control Panel's pyro buttons: a Fire (timed) and a Turn on (held on until reboot,
-// for a channel used as a power switch) button for every channel in PYRO_FIRE_FLAGS. Channels the
-// active profile doesn't have (pyroChannels) stay greyed out - no ctrl-btn class, so
-// setSerialEnabled() never enables them.
+// Rebuilds the Control Panel's pyro buttons: Arm/Disarm (--arm/--disarm, saved on the board;
+// a disarmed board never detects launch, so never deploys), then a Fire (timed) and a Turn on
+// (held on until reboot, for a channel used as a power switch) button for every channel in
+// PYRO_FIRE_FLAGS. Buttons the active profile doesn't support (armable, pyroChannels) stay
+// greyed out - no ctrl-btn class, so setSerialEnabled() never enables them.
 function rebuildPyroFireButtons(conn) {
     const container = document.getElementById('pyro-fire-buttons');
     if (!container) return;
-    container.innerHTML = Object.entries(PYRO_FIRE_FLAGS).map(([id, flag]) => {
+    const armAttrs = conn.profile.armable ? 'class="btn btn-warn ctrl-btn"' : `class="btn btn-warn" title="${conn.profile.displayName} can't be armed or disarmed"`;
+    const armStatus = conn.profile.armable
+        ? `<button id="arm-status" class="btn btn-secondary ctrl-btn arm-status" data-cmd="--armed" title="Click to re-check" disabled>Armed: ?</button>`
+        : `<button id="arm-status" class="btn btn-secondary arm-status" disabled>${conn.profile.displayName}: always armed</button>`;
+    const armRow = armStatus + `<div class="pyro-fire-row">
+        <button ${armAttrs} data-cmd="--arm" data-confirm="Arm the board? It will detect launch and deploy pyros in flight." disabled>Arm</button>
+        <button ${armAttrs} data-cmd="--disarm" data-confirm="Disarm the board? It won't detect launch or deploy anything until armed again." disabled>Disarm</button>
+    </div>`;
+    container.innerHTML = armRow + Object.entries(PYRO_FIRE_FLAGS).map(([id, flag]) => {
         const label = id.charAt(0).toUpperCase() + id.slice(1);
         const applies = conn.profile.pyroChannels.includes(id);
         const attrs = applies ? 'class="btn btn-warn ctrl-btn"' : `class="btn btn-warn" title="${conn.profile.displayName} has no ${label} channel"`;
@@ -26,7 +35,21 @@ function rebuildPyroFireButtons(conn) {
         </div>`;
     }).join('');
     setSerialEnabled(controlsUsable(conn)); // newly-created buttons start disabled - sync them to the real state
+    renderArmStatus(Telemetry.get('cfg.ARMED'));
 }
+
+// Shows the board's armed state ("ARMED is set to: 1/0" -> Telemetry cfg.ARMED) on the arm status
+// button above Arm/Disarm. null/undefined = not known yet (new connection, or not asked yet).
+function renderArmStatus(value) {
+    const el = document.getElementById('arm-status');
+    const conn = ConnectionManager.getActive();
+    if (!el || !conn || !conn.profile.armable) return;
+    const known = value === '1' || value === '0';
+    el.textContent = known ? (value === '1' ? 'ARMED' : 'DISARMED') : 'Armed: ?';
+    el.classList.toggle('arm-armed', value === '1');
+    el.classList.toggle('arm-disarmed', value === '0');
+}
+Telemetry.subscribe('cfg.ARMED', renderArmStatus);
 
 // Control Panel's log-health readout (see Connection.processLine, which
 // publishes these three keys from the "Entries in log:" / "Remaining log

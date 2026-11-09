@@ -270,6 +270,7 @@ const ALTIMETER_PROFILES = {
         configs: SILLY_GOOSE_CONFIGS,
         configFields: SILLY_GOOSE_CONFIG_FIELDS,
         pyroChannels: ["drogue", "main"],
+        armable: false,
         firmwareVariants: [
             { value: "V1", label: "SillyGoose V1" },
             { value: "V2", label: "SillyGoose V2" }
@@ -283,6 +284,7 @@ const ALTIMETER_PROFILES = {
         configFields: SERIOUS_GOOSE_CONFIG_FIELDS,
         firmwareVariants: [{ value: "V1", label: "SeriousGoose V1" }],
         pyroChannels: ["drogue", "main", "aux"],
+        armable: true,
         // Also matches an old already-deployed SeriousGooseGroundV1 unit (pre-GROUND_STATION_MODE
         // firmware) - it's the same board family/wire protocol, just running as a ground station,
         // which is now a runtime mode rather than separate firmware (see GROUND_STATION_MODE_c).

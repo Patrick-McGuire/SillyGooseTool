@@ -88,6 +88,8 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; align-i
 #pyro-fire-buttons { display: flex; flex-direction: column; gap: 4px; }
 .pyro-fire-row { display: flex; gap: 4px; }
 .pyro-fire-row .btn { flex: 1; }
+.arm-status.arm-armed { background: rgba(239, 68, 68, 0.25); color: #ef4444; font-weight: bold; }
+.arm-status.arm-disarmed { background: rgba(34, 197, 94, 0.2); color: var(--success); font-weight: bold; }
 .control-group-label { font-size: var(--fs-xs); color: #94a3b8; text-transform: uppercase; margin-bottom: 1px; }
 .control-group .btn { height: 36px; font-size: var(--fs-sm); padding: 3px 8px; }
 .control-readout-group { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; padding-top: 4px; border-top: 1px solid var(--border); }
