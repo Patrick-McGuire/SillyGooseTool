@@ -58,6 +58,7 @@ radioForwardBtn.onclick = () => {
     const conn = ConnectionManager.getActive();
     conn.forwardToRadio = !conn.forwardToRadio;
     syncRadioForwardButton(conn);
+    conn.applyControlProfile();
     // The armed status shown is for whichever board commands now reach - re-ask that one.
     Telemetry.set('cfg.ARMED', null);
     conn.requestArmState();

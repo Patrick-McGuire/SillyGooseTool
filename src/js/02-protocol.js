@@ -20,13 +20,19 @@ const RADIO_CONFIGS = [
     { id: "RADIO_FREQUENCY", label: "Radio Frequency (MHz)" },
     { id: "LORA_SPREADING_FACTOR", label: "LoRa Spreading Factor (5-12)" },
     { id: "RADIO_TRANSMIT_INTERVAL", label: "Radio TX Interval (milliseconds)" },
-    { id: "GROUND_STATION_MODE", label: "Ground Station Mode", type: "checkbox" }
+    { id: "GROUND_STATION_MODE", label: "Ground Station Mode", type: "checkbox" },
+    { id: "GPS_SOURCE", label: "GPS Source (0 onboard, 1 AUX port, applies on reboot)" }
+];
+// The Radio Board ground station's own settings (firmware builds/RadioBoardGroundStation.cpp).
+const RADIO_BOARD_CONFIGS = [
+    ...RADIO_CONFIGS.filter(c => c.id === "RADIO_FREQUENCY" || c.id === "LORA_SPREADING_FACTOR"),
+    ...SILLY_GOOSE_CONFIGS.filter(c => ["BOARD_NAME", "CONFIGURATION_VERSION", "FIRMWARE_VERSION"].includes(c.id))
 ];
 
 // Byte layout for a decoded LOG_CONFIG record's payload (see BasicLogger::logConfig() /
 // Configuration::getConfigDataBuffer()) - in firmware's declared/sorted-ID order
 // (ConfigurationRegistry.h), which is also assignMemory()'s field-placement order. SillyGoose
-// registers everything except the 3 radio fields; SeriousGoose registers all of them. This is a
+// registers everything except the SeriousGoose-only (radioOnly) fields; SeriousGoose registers all of them. This is a
 // DIFFERENT list from SILLY_GOOSE_CONFIGS/RADIO_CONFIGS above (those drive the editable-config
 // UI widget list and omit several fields - FLIGHT_STATE, BOARD_ORIENTATION, LAUNCH_ANGLE,
 // GYROSCOPE_BIAS - that still exist in the binary snapshot and must be decodable here).
@@ -49,6 +55,8 @@ const CONFIG_FIELD_DEFS = [
     { name: "BUZZER_ENABLED", type: "u32", size: 4, align: 4 },
     { name: "GROUND_STATION_MODE", type: "u32", size: 4, align: 4, radioOnly: true },
     { name: "FIRST_STAGE_BURNOUT", type: "u32", size: 4, align: 4 },
+    { name: "ARMED", type: "u32", size: 4, align: 4, radioOnly: true },
+    { name: "GPS_SOURCE", type: "u32", size: 4, align: 4, radioOnly: true },
 ];
 
 // Computes each field's byte offset the same way firmware's Configuration::assignMemory() does
@@ -288,7 +296,23 @@ const ALTIMETER_PROFILES = {
         // Also matches an old already-deployed SeriousGooseGroundV1 unit (pre-GROUND_STATION_MODE
         // firmware) - it's the same board family/wire protocol, just running as a ground station,
         // which is now a runtime mode rather than separate firmware (see GROUND_STATION_MODE_c).
-        usbNameMatch: /^seriousgoose/i
+        // Not the Radio Board ground station, which has its own profile below.
+        usbNameMatch: /^seriousgoose(?!groundradioboard)/i
+    },
+    // Ground-station-only board (SAMD51 + SX1262, no sensors or pyros). It relays a flying
+    // SeriousGoose, so while commands are forwarded over radio the config table and Arm/Fire
+    // controls are SeriousGoose's (relayProfile, see Connection.controlProfile()). It has no
+    // released firmware: the Firmware tab only offers a local UF2 for it.
+    RadioBoard: {
+        id: "RadioBoard",
+        displayName: "Radio Board",
+        configs: RADIO_BOARD_CONFIGS,
+        configFields: [],
+        firmwareVariants: [{ value: "V1", label: "Radio Board" }],
+        pyroChannels: [],
+        armable: false,
+        relayProfile: "SeriousGoose",
+        usbNameMatch: /^seriousgoosegroundradioboard/i
     }
 };
 const ALL_BOARD_FAMILIES = ALTIMETER_PROFILES;

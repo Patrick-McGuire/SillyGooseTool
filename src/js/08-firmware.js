@@ -197,6 +197,7 @@ const USB_PID_BOARD_MAP = {
     // runtime toggle on SeriousGoose rather than separate firmware. Kept mapped to SeriousGoose so
     // an already-deployed, not-yet-re-flashed ground station still auto-detects correctly.
     0x5004: { familyId: 'SeriousGoose', variant: 'V1' },
+    0x5005: { familyId: 'RadioBoard', variant: 'V1' },
 };
 
 // Exposed separately from fwDetectFamilyFromUsbIds() so 03-connection.js's

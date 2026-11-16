@@ -189,6 +189,21 @@ class Connection {
         rebuildPyroFireButtons(this);
     }
 
+    // The profile whose configs and Arm/Fire controls apply to the board commands reach: the
+    // relayed flight computer while forwarding over radio (relayProfile), else this board's own.
+    controlProfile() {
+        return this.forwardToRadio && this.profile.relayProfile ? ALTIMETER_PROFILES[this.profile.relayProfile] : this.profile;
+    }
+
+    // Rebuilds the config table and Arm/Fire controls when forwarding changes which board they reach.
+    applyControlProfile() {
+        const configs = this.controlProfile().configs;
+        if (configs === this.configs) return;
+        this.configs = configs;
+        rebuildConfigFields(this);
+        rebuildPyroFireButtons(this);
+    }
+
     // Applies a "LOG_FORMAT\t<definition>" line's definition. A bad definition is reported and
     // dropped, leaving whatever header was already known.
     applyLogFormat(definition) {
@@ -228,6 +243,7 @@ class Connection {
         this.setHeader([]);
         this.isGroundStation = false;
         this.forwardToRadio = false;
+        this.applyControlProfile();
         this.adoptStreamBlocked = false;
         this.erasePending = false;
         Telemetry.set('cfg.ARMED', null);
@@ -243,7 +259,7 @@ class Connection {
     // Asks an armable board (SeriousGoose) whether it's armed - the "ARMED is set to" reply lands
     // in Telemetry cfg.ARMED, which the Control Panel's arm status shows (renderArmStatus()).
     async requestArmState() {
-        if (!this.profile.armable) return;
+        if (!this.controlProfile().armable) return;
         try { await this.sendCmd("--armed"); } catch (e) { DebugLog.warn('protocol', 'armed request failed: ' + e.message); }
     }
 

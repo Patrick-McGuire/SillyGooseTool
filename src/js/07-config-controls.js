@@ -17,18 +17,19 @@ function setSerialEnabled(en) {
 function rebuildPyroFireButtons(conn) {
     const container = document.getElementById('pyro-fire-buttons');
     if (!container) return;
-    const armAttrs = conn.profile.armable ? 'class="btn btn-warn ctrl-btn"' : `class="btn btn-warn" title="${conn.profile.displayName} can't be armed or disarmed"`;
-    const armStatus = conn.profile.armable
+    const profile = conn.controlProfile();
+    const armAttrs = profile.armable ? 'class="btn btn-warn ctrl-btn"' : `class="btn btn-warn" title="${profile.displayName} can't be armed or disarmed"`;
+    const armStatus = profile.armable
         ? `<button id="arm-status" class="btn btn-secondary ctrl-btn arm-status" data-cmd="--armed" title="Click to re-check" disabled>Armed: ?</button>`
-        : `<button id="arm-status" class="btn btn-secondary arm-status" disabled>${conn.profile.displayName}: always armed</button>`;
+        : `<button id="arm-status" class="btn btn-secondary arm-status" disabled>${profile.displayName}: ${profile.pyroChannels.length ? 'always armed' : 'no pyros'}</button>`;
     const armRow = armStatus + `<div class="pyro-fire-row">
         <button ${armAttrs} data-cmd="--arm" data-confirm="Arm the board? Its pyros will be able to fire, including deployments in flight." disabled>Arm</button>
         <button ${armAttrs} data-cmd="--disarm" data-confirm="Disarm the board? Its pyros will be locked off (nothing fires, including deployments) until armed again. Flights are still tracked and logged." disabled>Disarm</button>
     </div>`;
     container.innerHTML = armRow + Object.entries(PYRO_FIRE_FLAGS).map(([id, flag]) => {
         const label = id.charAt(0).toUpperCase() + id.slice(1);
-        const applies = conn.profile.pyroChannels.includes(id);
-        const attrs = applies ? 'class="btn btn-warn ctrl-btn"' : `class="btn btn-warn" title="${conn.profile.displayName} has no ${label} channel"`;
+        const applies = profile.pyroChannels.includes(id);
+        const attrs = applies ? 'class="btn btn-warn ctrl-btn"' : `class="btn btn-warn" title="${profile.displayName} has no ${label} channel"`;
         return `<div class="pyro-fire-row">
             <button ${attrs} data-cmd="--fire ${flag}" data-confirm="Fire ${label} pyro?" disabled>Fire ${label}</button>
             <button ${attrs} data-cmd="--fire ${flag} --on" data-confirm="Turn on ${label} and hold it on until the board reboots?" disabled>Turn on ${label}</button>
@@ -43,7 +44,7 @@ function rebuildPyroFireButtons(conn) {
 function renderArmStatus(value) {
     const el = document.getElementById('arm-status');
     const conn = ConnectionManager.getActive();
-    if (!el || !conn || !conn.profile.armable) return;
+    if (!el || !conn || !conn.controlProfile().armable) return;
     const known = value === '1' || value === '0';
     el.textContent = known ? (value === '1' ? 'ARMED' : 'DISARMED') : 'Armed: ?';
     el.classList.toggle('arm-armed', value === '1');
