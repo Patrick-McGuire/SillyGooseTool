@@ -10,8 +10,8 @@ function setSerialEnabled(en) {
 }
 
 // Rebuilds the Control Panel's pyro buttons: Arm/Disarm (--arm/--disarm, saved on the board;
-// a disarmed board's pyros are locked off, so nothing fires), then a Fire (timed) and a Turn on
-// (held on until reboot, for a channel used as a power switch) button for every channel in
+// a disarmed board's pyros are locked off, so nothing fires), then Fire (timed), On (held on until
+// Off, --disarm or a reboot, for a channel used as a power switch) and Off buttons for every channel in
 // PYRO_FIRE_FLAGS. Buttons the active profile doesn't support (armable, pyroChannels) stay
 // greyed out - no ctrl-btn class, so setSerialEnabled() never enables them.
 function rebuildPyroFireButtons(conn) {
@@ -32,7 +32,8 @@ function rebuildPyroFireButtons(conn) {
         const attrs = applies ? 'class="btn btn-warn ctrl-btn"' : `class="btn btn-warn" title="${profile.displayName} has no ${label} channel"`;
         return `<div class="pyro-fire-row">
             <button ${attrs} data-cmd="--fire ${flag}" data-confirm="Fire ${label} pyro?" disabled>Fire ${label}</button>
-            <button ${attrs} data-cmd="--fire ${flag} --on" data-confirm="Turn on ${label} and hold it on until the board reboots?" disabled>Turn on ${label}</button>
+            <button ${attrs} data-cmd="--fire ${flag} -on" data-confirm="Turn on ${label} and hold it on until turned off, disarmed or the board reboots? Deployments don't turn a held channel off." title="Hold ${label} on (power switch)" disabled>${label} on</button>
+            <button ${attrs} data-cmd="--fire ${flag} -off" title="Turn ${label} off" disabled>${label} off</button>
         </div>`;
     }).join('');
     setSerialEnabled(controlsUsable(conn)); // newly-created buttons start disabled - sync them to the real state
